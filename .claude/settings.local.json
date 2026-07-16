@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /Users/sdbang/Desktop/2.Burunet/3D-visualization; echo \"=== README ===\"; cat README.md; echo \"=== package.json ===\"; cat package.json; echo \"=== src tree ===\"; find src public -type f | head -50; echo \"=== blender mcp registered? ===\"; grep -i -o \"blender[^\\\\\"]*\" ~/.claude.json | head; grep -i \"mcpServers\" ~/.claude.json | head)",
+      "Bash(nc -z -G 2 127.0.0.1 9876)",
+      "Bash(claude mcp *)",
+      "Bash(python3 blender_send.py step1_measure.py)",
+      "Bash(python3 blender_send.py step1b_measure_only.py)",
+      "Bash(python3 blender_send.py step1c_front.py)",
+      "Bash(python3 blender_send.py step2_build.py)",
+      "Bash(python3 blender_send.py step3_render.py)",
+      "Bash(python3 blender_send.py step5_saveblend.py)",
+      "Bash(python3 blender_send.py step6_beauty.py)",
+      "Bash(python3 blender_send.py step7_reframe.py)",
+      "Bash(mkdir -p /Users/sdbang/Desktop/2.Burunet/3D-visualization/docs/renders && cp /private/tmp/claude-501/-Users-sdbang-Desktop-2-Burunet-3D-visualization/22631986-bfdb-4df3-bffe-53f160450434/scratchpad/beauty_*.png /Users/sdbang/Desktop/2.Burunet/3D-visualization/docs/renders/ && ls -la /Users/sdbang/Desktop/2.Burunet/3D-visualization/docs/renders/)",
+      "Bash(python3 -c \"import PIL; print\\('PIL', PIL.__version__\\)\")",
+      "Bash(python3 -c \"import numpy; print\\('numpy ok'\\)\")",
+      "Read(//System/Library/Fonts/**)",
+      "Bash(python3 gen_textures.py)",
+      "Bash(python3 blender_send.py step8_texture.py)"
+    ]
+  }
+}

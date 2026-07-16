@@ -1,0 +1,21 @@
+{
+  "task_id": "0b2e02c8-30fb-423d-826d-334675edb18a",
+  "type": "multiview_to_model",
+  "status": "success",
+  "progress": 100,
+  "consumed_credit": 30,
+  "model_version": "v3.1-20260211",
+  "input_views": [
+    "front",
+    "back"
+  ],
+  "options": {
+    "texture": true,
+    "pbr": true,
+    "texture_quality": "standard",
+    "geometry_quality": "standard",
+    "texture_alignment": "original_image",
+    "orientation": "align_image"
+  },
+  "saved_model": "public/models/cisco-ucs-c240-m7.tripo.glb"
+}
