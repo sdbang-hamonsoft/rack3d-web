@@ -1,6 +1,11 @@
 import { Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { ContactShadows, Environment, Html, Lightformer, OrbitControls, useCursor, useGLTF } from '@react-three/drei'
+import * as echarts from 'echarts/core'
+import type { EChartsCoreOption } from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import { AriaComponent, GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
 import * as THREE from 'three'
 import type { Group } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
@@ -15,6 +20,8 @@ const RACK_FOCUS_HEIGHT = 1.06
 const RACK_FOCUS_DISTANCE = 1.15
 const OVERVIEW_CAMERA_POSITION = new THREE.Vector3(5.4, 2.2, 9.5)
 const OVERVIEW_CAMERA_TARGET = new THREE.Vector3(3.3, 0.9, 4.2)
+
+echarts.use([LineChart, AriaComponent, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
 type ServerStatus = 'healthy' | 'warning' | 'critical' | 'offline'
 type ServerModel = 'dell-poweredge-r760' | 'hpe-proliant-dl360-gen11' | 'cisco-ucs-c240-m7'
@@ -40,6 +47,7 @@ type RackData = {
 }
 
 type DataCenterStatus = 'operational' | 'attention'
+type ThemeMode = 'dark' | 'light'
 
 type DataCenterData = {
   id: string
@@ -293,6 +301,12 @@ type DashboardMetrics = {
   alerts: DashboardAlert[]
 }
 
+type TemperatureHistoryPoint = {
+  time: string
+  roomAverageCelsius: number
+  rackCelsius: Record<string, number>
+}
+
 function getRackMetrics(rack: RackData): RackMetrics {
   const occupied = Array.from({ length: rack.totalUnits }, () => false)
   const statusCounts: Record<ServerStatus, number> = { healthy: 0, warning: 0, critical: 0, offline: 0 }
@@ -515,6 +529,41 @@ function getDashboardMetrics(rackData: RackData[]): DashboardMetrics {
     rackMetrics,
     alerts,
   }
+}
+
+function createTemperatureHistory(dataCenter: DataCenterData, rackData: RackData[]): TemperatureHistoryPoint[] {
+  const now = new Date()
+  const lastDailyWave = Math.sin((23 - 7) / 24 * Math.PI * 2) * 0.65 + Math.cos(23 / 3) * 0.14
+  const baseOffsets = [-0.5, 0.8, -0.4, 0.1]
+  const waveWeights = [1, -0.5, -0.3, -0.2]
+
+  return Array.from({ length: 24 }, (_, index) => {
+    const timestamp = new Date(now)
+    timestamp.setMinutes(0, 0, 0)
+    timestamp.setHours(now.getHours() - (23 - index))
+    const dailyWave = Math.sin((index - 7) / 24 * Math.PI * 2) * 0.65 + Math.cos(index / 3) * 0.14
+    const targetAverage = dataCenter.temperature + dailyWave - lastDailyWave
+    const oscillation = Math.sin(index * 0.62) * 0.2
+    const rawOffsets = rackData.map((_, rackIndex) => (
+      (baseOffsets[rackIndex] ?? 0) + oscillation * (waveWeights[rackIndex] ?? 0)
+    ))
+    const offsetAverage = rawOffsets.length > 0
+      ? rawOffsets.reduce((sum, value) => sum + value, 0) / rawOffsets.length
+      : 0
+    const rackCelsius = Object.fromEntries(rackData.map((rack, rackIndex) => [
+      rack.id,
+      Number((targetAverage + rawOffsets[rackIndex] - offsetAverage).toFixed(1)),
+    ]))
+    const roomAverageCelsius = rackData.length > 0
+      ? Number((Object.values(rackCelsius).reduce((sum, value) => sum + value, 0) / rackData.length).toFixed(1))
+      : Number(targetAverage.toFixed(1))
+
+    return {
+      time: `${String(timestamp.getHours()).padStart(2, '0')}:00`,
+      roomAverageCelsius,
+      rackCelsius,
+    }
+  })
 }
 
 function cloneModel(scene: Group, status?: ServerStatus) {
@@ -783,22 +832,34 @@ function Rack({
   )
 }
 
-function FloorTiles({ columns = 18, rows = 14 }) {
+function FloorTiles({ columns = 18, rows = 14, theme }: { columns?: number; rows?: number; theme: ThemeMode }) {
   const tiles = useMemo(() => Array.from({ length: columns * rows }, (_, index) => ({
     x: index % columns,
     z: Math.floor(index / columns),
   })), [columns, rows])
+  const lightTheme = theme === 'light'
 
   return (
     <group>
       {tiles.map(({ x, z }) => (
         <mesh key={`${x}-${z}`} position={[x * TILE_SIZE, 0, z * TILE_SIZE]} receiveShadow>
           <boxGeometry args={[TILE_SIZE - 0.012, 0.08, TILE_SIZE - 0.012]} />
-          <meshStandardMaterial color={(x + z) % 2 ? '#263140' : '#2d3949'} roughness={0.72} metalness={0.12} />
+          <meshStandardMaterial
+            color={(x + z) % 2
+              ? (lightTheme ? '#aab7c2' : '#263140')
+              : (lightTheme ? '#bac5ce' : '#2d3949')}
+            roughness={0.72}
+            metalness={0.12}
+          />
         </mesh>
       ))}
       <gridHelper
-        args={[Math.max(columns, rows) * TILE_SIZE, Math.max(columns, rows), '#52637a', '#354256']}
+        args={[
+          Math.max(columns, rows) * TILE_SIZE,
+          Math.max(columns, rows),
+          lightTheme ? '#718598' : '#52637a',
+          lightTheme ? '#95a5b2' : '#354256',
+        ]}
         position={[(columns - 1) * TILE_SIZE / 2, 0.045, (rows - 1) * TILE_SIZE / 2]}
       />
     </group>
@@ -916,21 +977,25 @@ function DataCenterScene({
   focusedRack,
   selectedServer,
   heatmapVisuals,
+  theme,
   onFocusRack,
   onSelectServer,
 }: {
   focusedRack: RackData | null
   selectedServer: ServerData | null
   heatmapVisuals: Map<string, RackHeatmapVisual>
+  theme: ThemeMode
   onFocusRack: (rack: RackData) => void
   onSelectServer: (rack: RackData, server: ServerData) => void
 }) {
+  const lightTheme = theme === 'light'
+
   return (
     <>
-      <color attach="background" args={['#071019']} />
-      <fog attach="fog" args={['#071019', 12, 28]} />
-      <ambientLight intensity={1.7} color="#b9d8f3" />
-      <hemisphereLight args={['#e5f4ff', '#425269', 2.1]} />
+      <color attach="background" args={[lightTheme ? '#d5e0e9' : '#071019']} />
+      <fog attach="fog" args={[lightTheme ? '#d5e0e9' : '#071019', 12, 28]} />
+      <ambientLight intensity={lightTheme ? 1.45 : 1.7} color="#b9d8f3" />
+      <hemisphereLight args={['#e5f4ff', lightTheme ? '#728191' : '#425269', lightTheme ? 1.8 : 2.1]} />
       <directionalLight
         position={[6, 10, 7]}
         intensity={3.2}
@@ -949,7 +1014,7 @@ function DataCenterScene({
         <Lightformer intensity={1.6} color="#ffffff" position={[6, 1, 4]} rotation={[0, -Math.PI / 2, 0]} scale={[5, 2, 1]} />
       </Environment>
       <Suspense fallback={<Loading />}>
-        <FloorTiles />
+        <FloorTiles theme={theme} />
         {racks.map((rack) => (
           <Rack
             key={rack.id}
@@ -961,21 +1026,60 @@ function DataCenterScene({
             onSelectServer={onSelectServer}
           />
         ))}
-        <ContactShadows position={[5.1, 0.055, 3.9]} scale={14} opacity={0.38} blur={2.4} far={5} resolution={1024} />
+        <ContactShadows position={[5.1, 0.055, 3.9]} scale={14} opacity={lightTheme ? 0.25 : 0.38} blur={2.4} far={5} resolution={1024} />
       </Suspense>
       <CameraController focusRack={focusedRack} focusServer={selectedServer} />
     </>
   )
 }
 
-function SplashScreen({ onComplete }: { onComplete: () => void }) {
+function ThemeToggle({
+  theme,
+  onToggle,
+  className = '',
+}: {
+  theme: ThemeMode
+  onToggle: () => void
+  className?: string
+}) {
+  const nextThemeLabel = theme === 'dark' ? '밝은' : '어두운'
+
+  return (
+    <button
+      className={`theme-toggle ${className}`.trim()}
+      type="button"
+      onClick={onToggle}
+      aria-label={`${nextThemeLabel} 테마로 변경`}
+      title={`${nextThemeLabel} 테마로 변경`}
+    >
+      <span className="theme-toggle-icon" aria-hidden="true">
+        {theme === 'dark' ? (
+          <svg viewBox="0 0 24 24"><path className="theme-moon-shape" d="M19.2 15.2A8 8 0 0 1 8.8 4.8 7.1 7.1 0 1 0 19.2 15.2Z" /></svg>
+        ) : (
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1" /></svg>
+        )}
+      </span>
+      <span className="theme-toggle-copy"><small>APPEARANCE</small><strong>{theme.toUpperCase()}</strong></span>
+    </button>
+  )
+}
+
+function SplashScreen({
+  onComplete,
+  theme,
+  onToggleTheme,
+}: {
+  onComplete: () => void
+  theme: ThemeMode
+  onToggleTheme: () => void
+}) {
   useEffect(() => {
     const timer = window.setTimeout(onComplete, SPLASH_DURATION)
     return () => window.clearTimeout(timer)
   }, [onComplete])
 
   return (
-    <main className="splash-shell">
+    <main className="splash-shell" data-theme={theme}>
       <div className="splash-grid" aria-hidden="true" />
       <div className="splash-orbit splash-orbit-outer" aria-hidden="true" />
       <div className="splash-orbit splash-orbit-inner" aria-hidden="true" />
@@ -989,6 +1093,7 @@ function SplashScreen({ onComplete }: { onComplete: () => void }) {
       <div className="splash-company-brand">
         <img src="/hamonsoft-logo.svg" alt="(주)하몬소프트" />
       </div>
+      <ThemeToggle theme={theme} onToggle={onToggleTheme} className="splash-theme-toggle" />
 
       <section className="splash-content" aria-labelledby="splash-title">
         <div className="splash-emblem" aria-hidden="true">
@@ -1031,12 +1136,20 @@ function SplashScreen({ onComplete }: { onComplete: () => void }) {
   )
 }
 
-function DataCenterLobby({ onSelect }: { onSelect: (dataCenter: DataCenterData) => void }) {
+function DataCenterLobby({
+  onSelect,
+  theme,
+  onToggleTheme,
+}: {
+  onSelect: (dataCenter: DataCenterData) => void
+  theme: ThemeMode
+  onToggleTheme: () => void
+}) {
   const totalRacks = dataCenters.reduce((total, dataCenter) => total + dataCenter.rackCount, 0)
   const totalServers = dataCenters.reduce((total, dataCenter) => total + dataCenter.serverCount, 0)
 
   return (
-    <main className="lobby-shell">
+    <main className="lobby-shell" data-theme={theme}>
       <div className="lobby-glow lobby-glow-one" />
       <div className="lobby-glow lobby-glow-two" />
 
@@ -1055,6 +1168,7 @@ function DataCenterLobby({ onSelect }: { onSelect: (dataCenter: DataCenterData) 
           <h1>Rack3D Visualization</h1>
         </div>
         <div className="lobby-system-status"><i /> ALL SYSTEMS CONNECTED</div>
+        <ThemeToggle theme={theme} onToggle={onToggleTheme} className="lobby-theme-toggle" />
       </header>
 
       <section className="lobby-content">
@@ -1579,6 +1693,124 @@ function HeatmapControl({
   )
 }
 
+function TemperatureHistoryChart({
+  points,
+  rackData,
+  theme,
+  active,
+}: {
+  points: TemperatureHistoryPoint[]
+  rackData: RackData[]
+  theme: ThemeMode
+  active: boolean
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || !active) return
+
+    const lightTheme = theme === 'light'
+    const rackColors = ['#ff9f43', '#7d8cff', '#35c98f', '#c379ef']
+    const averageColor = lightTheme ? '#087fa8' : '#63d7ff'
+    const axisColor = lightTheme ? '#6a7d8d' : '#60798d'
+    const splitLineColor = lightTheme ? '#c9d4dc' : '#223b4d'
+    const allValues = points.flatMap((point) => [
+      point.roomAverageCelsius,
+      ...rackData.map((rack) => point.rackCelsius[rack.id]),
+    ])
+    const yMin = Math.floor(Math.min(...allValues) - 0.8)
+    const yMax = Math.ceil(Math.max(...allValues) + 0.8)
+    const chart = echarts.init(container, undefined, { renderer: 'canvas' })
+    const option: EChartsCoreOption = {
+      animationDuration: 650,
+      aria: { enabled: true },
+      color: [averageColor, ...rackColors],
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: lightTheme ? '#ffffff' : '#081722f5',
+        borderColor: lightTheme ? '#9fb4c3' : '#35556c',
+        textStyle: { color: lightTheme ? '#1a2e3e' : '#dce9f5', fontSize: 11 },
+        valueFormatter: (value: unknown) => `${Number(value).toFixed(1)} °C`,
+      },
+      legend: {
+        type: 'scroll',
+        top: 0,
+        left: 0,
+        right: 0,
+        itemWidth: 16,
+        itemHeight: 3,
+        itemGap: 16,
+        textStyle: { color: axisColor, fontSize: 10, fontFamily: 'ui-monospace, monospace' },
+        pageIconColor: averageColor,
+        pageIconInactiveColor: lightTheme ? '#aab9c4' : '#3d5668',
+        pageTextStyle: { color: axisColor, fontSize: 9 },
+      },
+      grid: { top: 45, right: 18, bottom: 32, left: 48 },
+      xAxis: {
+        type: 'category',
+        boundaryGap: false,
+        data: points.map((point) => point.time),
+        axisLine: { lineStyle: { color: splitLineColor } },
+        axisTick: { show: false },
+        axisLabel: { color: axisColor, fontSize: 9, interval: 3 },
+      },
+      yAxis: {
+        type: 'value',
+        min: yMin,
+        max: yMax,
+        splitNumber: 4,
+        axisLabel: { color: axisColor, fontSize: 9, formatter: '{value}°' },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: splitLineColor, type: 'dashed' } },
+      },
+      series: [
+        {
+          name: '전산실 평균',
+          type: 'line',
+          data: points.map((point) => point.roomAverageCelsius),
+          showSymbol: false,
+          smooth: 0.32,
+          lineStyle: { width: 3, color: averageColor },
+          areaStyle: { color: lightTheme ? '#1299c31f' : '#43cfff1a' },
+          emphasis: { focus: 'series' },
+          z: 5,
+        },
+        ...rackData.map((rack, rackIndex) => ({
+          name: `RACK ${rack.label}`,
+          type: 'line' as const,
+          data: points.map((point) => point.rackCelsius[rack.id]),
+          showSymbol: false,
+          smooth: 0.25,
+          lineStyle: { width: 1.5, color: rackColors[rackIndex % rackColors.length], opacity: 0.86 },
+          emphasis: { focus: 'series' as const, lineStyle: { width: 3 } },
+        })),
+      ],
+    }
+
+    chart.setOption(option)
+    const resizeObserver = new ResizeObserver(() => chart.resize())
+    resizeObserver.observe(container)
+    const resizeFrame = window.requestAnimationFrame(() => chart.resize())
+
+    return () => {
+      window.cancelAnimationFrame(resizeFrame)
+      resizeObserver.disconnect()
+      chart.dispose()
+    }
+  }, [active, points, rackData, theme])
+
+  return (
+    <div
+      ref={containerRef}
+      className="temperature-history-chart"
+      role="img"
+      aria-label="최근 24시간 전산실 평균 환경온도와 랙별 흡입구 온도 추이 그래프"
+    />
+  )
+}
+
 function DataCenterDashboard({
   open,
   onToggle,
@@ -1587,6 +1819,7 @@ function DataCenterDashboard({
   metrics,
   incidentRecords,
   activeIncidentServerId,
+  theme,
 }: {
   open: boolean
   onToggle: () => void
@@ -1595,6 +1828,7 @@ function DataCenterDashboard({
   metrics: DashboardMetrics
   incidentRecords: Record<string, IncidentRecord>
   activeIncidentServerId: string | null
+  theme: ThemeMode
 }) {
   const statusOrder: ServerStatus[] = ['healthy', 'warning', 'critical', 'offline']
   const statusDegrees = statusOrder.reduce<Record<ServerStatus, { start: number; end: number }>>((result, status) => {
@@ -1611,6 +1845,7 @@ function DataCenterDashboard({
     'hpe-proliant-dl360-gen11': '#7b8cff',
     'cisco-ucs-c240-m7': '#bb79ff',
   }
+  const temperatureHistory = useMemo(() => createTemperatureHistory(dataCenter, racks), [dataCenter])
 
   return (
     <>
@@ -1651,6 +1886,15 @@ function DataCenterDashboard({
                 <em>across {metrics.rackMetrics.length} racks</em>
               </article>
             </section>
+
+            <article className="dashboard-card temperature-history-card">
+              <div className="dashboard-card-heading">
+                <div><span>ENVIRONMENT · LAST 24H</span><h3>Temperature trend</h3></div>
+                <small>전산실 평균 {dataCenter.temperature.toFixed(1)}°C · 랙 흡입구 센서</small>
+              </div>
+              <TemperatureHistoryChart points={temperatureHistory} rackData={racks} theme={theme} active={open} />
+              <p className="temperature-history-note"><i /> DEMO TELEMETRY · 서버 내부 온도와 분리된 환경 센서 데이터</p>
+            </article>
 
             <section className="dashboard-chart-grid">
               <article className="dashboard-card capacity-chart-card">
@@ -1753,6 +1997,14 @@ function preloadSceneAssets() {
 
 function App() {
   const [showSplash, setShowSplash] = useState(true)
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    try {
+      const savedTheme = window.localStorage.getItem('rack3d-theme')
+      return savedTheme === 'light' || savedTheme === 'dark' ? savedTheme : 'dark'
+    } catch {
+      return 'dark'
+    }
+  })
   const [selectedDataCenter, setSelectedDataCenter] = useState<DataCenterData | null>(null)
   const [focusedRack, setFocusedRack] = useState<RackData | null>(null)
   const [selectedServer, setSelectedServer] = useState<ServerData | null>(null)
@@ -1769,6 +2021,18 @@ function App() {
     ? dashboardMetrics.alerts.findIndex(({ server }) => server.id === selectedServer.id)
     : -1
   const selectedIncidentRecord = selectedServer && selectedServer.status !== 'healthy' ? incidentRecords[selectedServer.id] : undefined
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    document.documentElement.style.colorScheme = theme
+    try {
+      window.localStorage.setItem('rack3d-theme', theme)
+    } catch {
+      // The selected theme still applies for this session when storage is unavailable.
+    }
+  }, [theme])
+
+  const toggleTheme = () => setTheme((current) => current === 'dark' ? 'light' : 'dark')
 
   const clearFocus = () => {
     setFocusedRack(null)
@@ -1814,15 +2078,15 @@ function App() {
   }
 
   if (showSplash) {
-    return <SplashScreen onComplete={() => setShowSplash(false)} />
+    return <SplashScreen onComplete={() => setShowSplash(false)} theme={theme} onToggleTheme={toggleTheme} />
   }
 
   if (!selectedDataCenter) {
-    return <DataCenterLobby onSelect={setSelectedDataCenter} />
+    return <DataCenterLobby onSelect={setSelectedDataCenter} theme={theme} onToggleTheme={toggleTheme} />
   }
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" data-theme={theme}>
       <header className="topbar">
         <button
           className="back-button"
@@ -1838,6 +2102,7 @@ function App() {
           <span>{selectedDataCenter.code} · 3D RACK VISUALIZATION</span>
         </div>
         <AssetSearch rackData={racks} onSelectRack={handleFocusRack} onSelectServer={handleSelectServer} />
+        <ThemeToggle theme={theme} onToggle={toggleTheme} className="rack-theme-toggle" />
         <div className="summary">
           <span><strong>{racks.length}</strong> RACKS</span>
           <span><strong>{serverCount}</strong> SERVERS</span>
@@ -1869,6 +2134,7 @@ function App() {
               focusedRack={focusedRack}
               selectedServer={selectedServer}
               heatmapVisuals={heatmapDataset.visuals}
+              theme={theme}
               onFocusRack={handleFocusRack}
               onSelectServer={handleSelectServer}
             />
@@ -2026,6 +2292,7 @@ function App() {
           metrics={dashboardMetrics}
           incidentRecords={incidentRecords}
           activeIncidentServerId={incidentMode ? selectedServer?.id ?? null : null}
+          theme={theme}
         />
       </section>
     </main>
