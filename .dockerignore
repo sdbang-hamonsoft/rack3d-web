@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.gitignore
+*.md
+.DS_Store
+.claude
+.codex
+artifacts
+blender
+docs
+k8s
