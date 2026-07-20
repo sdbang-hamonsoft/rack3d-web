@@ -770,14 +770,47 @@ function Rack({
             />
           </mesh>
           <mesh position={[0, 0.015, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => undefined} renderOrder={-1}>
-            <ringGeometry args={[0.43, 0.82, 48]} />
-            <meshBasicMaterial
-              color={heatmap.color}
+            <planeGeometry args={[3.6, 3.6]} />
+            <shaderMaterial
               transparent
-              opacity={0.12 + heatmap.normalized * 0.18}
               depthWrite={false}
               toneMapped={false}
               side={THREE.DoubleSide}
+              uniforms={{
+                uColor: { value: new THREE.Color() },
+                uIntensity: { value: 0 }
+              }}
+              uniforms-uColor-value={new THREE.Color(heatmap.color)}
+              uniforms-uIntensity-value={heatmap.normalized}
+              vertexShader={`
+                varying vec2 vUv;
+                void main() {
+                  vUv = uv;
+                  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+              `}
+              fragmentShader={`
+                uniform vec3 uColor;
+                uniform float uIntensity;
+                varying vec2 vUv;
+                
+                void main() {
+                  // Distance from center (0.5, 0.5)
+                  float dist = distance(vUv, vec2(0.5));
+                  
+                  // Softer, wider gaussian falloff (reduced multiplier from 14.0 to 7.0)
+                  float alpha = exp(-dist * dist * 7.0) * (0.3 + uIntensity * 0.7);
+                  
+                  // White hot core based on intensity (also slightly wider)
+                  float core = exp(-dist * dist * 25.0) * uIntensity * 0.7;
+                  vec3 finalColor = mix(uColor, vec3(1.0), core);
+                  
+                  // Smoothly fade out edges completely (wider visible area before fade)
+                  float edgeFade = smoothstep(0.5, 0.3, dist);
+                  
+                  gl_FragColor = vec4(finalColor, alpha * edgeFade);
+                }
+              `}
             />
           </mesh>
           <pointLight
