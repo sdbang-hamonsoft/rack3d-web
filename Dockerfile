@@ -21,8 +21,10 @@ RUN echo 'server { \
     root /usr/share/nginx/html; \
     index index.html; \
     \
+    # Always revalidate the SPA entry point so new deployments are picked up \
     location / { \
         try_files $uri $uri/ /index.html; \
+        add_header Cache-Control "no-cache"; \
     } \
     \
     # Cache static assets \
