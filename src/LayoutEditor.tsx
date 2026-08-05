@@ -170,9 +170,6 @@ function LayoutEditor({
       ...current,
       { id, label, totalUnits: 42, tileX: x, tileZ: z, rotation: 0, servers: [] },
     ])
-    setPlacing(false)
-    setGhostCell(null)
-    selectRack(id)
   }
 
   const moveSelectedRack = (deltaX: number, deltaZ: number) => {
@@ -602,7 +599,7 @@ function LayoutEditor({
               <p className="panel-title">LAYOUT EDITOR</p>
               <div className="mouse-tip layout-editor-help">
                 랙을 클릭해 선택하고, 드래그해 다른 타일로 이동할 수 있습니다.
-                {placing ? ' 빈 타일을 클릭하면 새 랙이 배치됩니다.' : ' 새 랙은 아래 버튼으로 추가하세요.'}
+                {placing ? ' 빈 타일을 클릭할 때마다 새 랙이 추가됩니다. 원하는 만큼 배치한 뒤 Esc 또는 아래 버튼으로 마치세요.' : ' 새 랙은 아래 버튼으로 추가하세요.'}
               </div>
               <div className="key-row"><kbd>Esc</kbd><span>선택 해제 / 취소</span></div>
               <div className="key-row"><kbd>R</kbd><span>90° 회전</span></div>
@@ -615,7 +612,7 @@ function LayoutEditor({
                 onClick={togglePlacing}
                 aria-pressed={placing}
               >
-                {placing ? '배치할 타일을 클릭하세요 · 취소' : '+ 랙 추가'}
+                {placing ? '배치 종료 (Esc)' : '+ 랙 추가'}
               </button>
               <button
                 className={`overview-button layout-editor-warn${armedAction === 'reset' ? ' armed' : ''}`}
