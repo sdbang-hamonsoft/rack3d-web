@@ -9,6 +9,9 @@ import { CanvasRenderer } from 'echarts/renderers'
 import * as THREE from 'three'
 import type { Group } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
+import LayoutEditor from './LayoutEditor'
+import { getRacksForDataCenter } from './rackLayouts'
+import type { RackData, ServerData, ServerModel, ServerStatus } from './rackLayouts'
 import './App.css'
 
 const TILE_SIZE = 0.6
@@ -23,29 +26,6 @@ const OVERVIEW_CAMERA_TARGET = new THREE.Vector3(3.3, 0.9, 4.2)
 
 echarts.use([LineChart, AriaComponent, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
-type ServerStatus = 'healthy' | 'warning' | 'critical' | 'offline'
-type ServerModel = 'dell-poweredge-r760' | 'hpe-proliant-dl360-gen11' | 'cisco-ucs-c240-m7'
-
-type ServerData = {
-  id: string
-  name: string
-  model: ServerModel
-  startU: number
-  units: 1 | 2
-  status: ServerStatus
-}
-
-type RackData = {
-  id: string
-  label: string
-  alert?: boolean
-  totalUnits: number
-  tileX: number
-  tileZ: number
-  rotation: number
-  servers: ServerData[]
-}
-
 type DataCenterStatus = 'operational' | 'attention'
 type ThemeMode = 'dark' | 'light'
 
@@ -55,10 +35,6 @@ type DataCenterData = {
   name: string
   location: string
   description: string
-  status: DataCenterStatus
-  rackCount: number
-  serverCount: number
-  alerts: number
   temperature: number
 }
 
@@ -69,10 +45,6 @@ const dataCenters: DataCenterData[] = [
     name: '서울 메인 전산실',
     location: '서울특별시 강남구',
     description: '핵심 서비스와 데이터베이스 인프라를 운영합니다.',
-    status: 'attention',
-    rackCount: 4,
-    serverCount: 10,
-    alerts: 3,
     temperature: 21.4,
   },
   {
@@ -81,10 +53,6 @@ const dataCenters: DataCenterData[] = [
     name: '판교 엣지 전산실',
     location: '경기도 성남시 분당구',
     description: '저지연 엣지 서비스와 실시간 처리 워크로드를 담당합니다.',
-    status: 'operational',
-    rackCount: 6,
-    serverCount: 24,
-    alerts: 0,
     temperature: 20.8,
   },
   {
@@ -93,44 +61,7 @@ const dataCenters: DataCenterData[] = [
     name: '부산 DR 전산실',
     location: '부산광역시 해운대구',
     description: '재해 복구와 백업 서비스를 위한 보조 센터입니다.',
-    status: 'operational',
-    rackCount: 3,
-    serverCount: 9,
-    alerts: 0,
     temperature: 20.2,
-  },
-]
-
-const racks: RackData[] = [
-  {
-    id: 'rack-a01', label: 'A-01', totalUnits: 42, tileX: 4, tileZ: 4, rotation: 0,
-    servers: [
-      { id: 'srv-001', name: 'Core API 01', model: 'hpe-proliant-dl360-gen11', startU: 2, units: 1, status: 'healthy' },
-      { id: 'srv-002', name: 'Database 01', model: 'dell-poweredge-r760', startU: 5, units: 2, status: 'healthy' },
-    ],
-  },
-  {
-    id: 'rack-a02', label: 'A-02', alert: true, totalUnits: 42, tileX: 7, tileZ: 4, rotation: 0,
-    servers: [
-      { id: 'srv-004', name: 'Web 01', model: 'hpe-proliant-dl360-gen11', startU: 1, units: 1, status: 'healthy' },
-      { id: 'srv-005', name: 'Web 02', model: 'hpe-proliant-dl360-gen11', startU: 3, units: 1, status: 'critical' },
-      { id: 'srv-006', name: 'Compute 01', model: 'dell-poweredge-r760', startU: 8, units: 2, status: 'healthy' },
-    ],
-  },
-  {
-    id: 'rack-b01', label: 'B-01', totalUnits: 42, tileX: 4, tileZ: 9, rotation: Math.PI,
-    servers: [
-      { id: 'srv-007', name: 'Backup 01', model: 'cisco-ucs-c240-m7', startU: 4, units: 2, status: 'offline' },
-      { id: 'srv-008', name: 'Monitoring 01', model: 'hpe-proliant-dl360-gen11', startU: 12, units: 1, status: 'healthy' },
-    ],
-  },
-  {
-    id: 'rack-b02', label: 'B-02', totalUnits: 42, tileX: 7, tileZ: 9, rotation: Math.PI,
-    servers: [
-      { id: 'srv-009', name: 'GPU Worker 01', model: 'dell-poweredge-r760', startU: 2, units: 2, status: 'warning' },
-      { id: 'srv-010', name: 'Network 01', model: 'hpe-proliant-dl360-gen11', startU: 7, units: 1, status: 'healthy' },
-      { id: 'srv-011', name: 'Storage 02', model: 'cisco-ucs-c240-m7', startU: 14, units: 2, status: 'healthy' },
-    ],
   },
 ]
 
@@ -460,7 +391,7 @@ function getHeatmapDataset(rackData: RackData[], mode: HeatmapMode): HeatmapData
   if (mode === 'normal') return { visuals: new Map(), min: 0, max: 0 }
 
   const values = rackData.map((rack) => ({ rack, value: getRackHeatmapValue(rack, mode) }))
-  const fleetMax = Math.max(...values.map(({ value }) => value))
+  const fleetMax = values.length > 0 ? Math.max(...values.map(({ value }) => value)) : 0
   const min = mode === 'temperature' ? 30 : 0
   const max = mode === 'temperature'
     ? 80
@@ -1007,6 +938,7 @@ function Loading() {
 }
 
 function DataCenterScene({
+  racks,
   focusedRack,
   selectedServer,
   heatmapVisuals,
@@ -1014,6 +946,7 @@ function DataCenterScene({
   onFocusRack,
   onSelectServer,
 }: {
+  racks: RackData[]
   focusedRack: RackData | null
   selectedServer: ServerData | null
   heatmapVisuals: Map<string, RackHeatmapVisual>
@@ -1178,8 +1111,17 @@ function DataCenterLobby({
   theme: ThemeMode
   onToggleTheme: () => void
 }) {
-  const totalRacks = dataCenters.reduce((total, dataCenter) => total + dataCenter.rackCount, 0)
-  const totalServers = dataCenters.reduce((total, dataCenter) => total + dataCenter.serverCount, 0)
+  const facilitySummaries = useMemo(() => dataCenters.map((dataCenter) => {
+    const layout = getRacksForDataCenter(dataCenter.id)
+    const serverCount = layout.reduce((total, rack) => total + rack.servers.length, 0)
+    const alerts = layout.reduce((total, rack) => (
+      total + rack.servers.filter((server) => server.status !== 'healthy').length
+    ), 0)
+    const status: DataCenterStatus = alerts > 0 ? 'attention' : 'operational'
+    return { dataCenter, rackCount: layout.length, serverCount, alerts, status }
+  }), [])
+  const totalRacks = facilitySummaries.reduce((total, summary) => total + summary.rackCount, 0)
+  const totalServers = facilitySummaries.reduce((total, summary) => total + summary.serverCount, 0)
 
   return (
     <main className="lobby-shell" data-theme={theme}>
@@ -1219,7 +1161,7 @@ function DataCenterLobby({
         </div>
 
         <div className="facility-list">
-          {dataCenters.map((dataCenter, index) => (
+          {facilitySummaries.map(({ dataCenter, rackCount, serverCount, alerts, status }, index) => (
             <button
               className="facility-card"
               key={dataCenter.id}
@@ -1232,8 +1174,8 @@ function DataCenterLobby({
               <span className="facility-main">
                 <span className="facility-heading">
                   <span className="facility-code">{dataCenter.code}</span>
-                  <span className={`facility-status ${dataCenter.status}`}>
-                    <i /> {dataCenter.status === 'operational' ? 'OPERATIONAL' : 'ATTENTION'}
+                  <span className={`facility-status ${status}`}>
+                    <i /> {status === 'operational' ? 'OPERATIONAL' : 'ATTENTION'}
                   </span>
                 </span>
                 <strong>{dataCenter.name}</strong>
@@ -1241,11 +1183,11 @@ function DataCenterLobby({
                 <span className="facility-description">{dataCenter.description}</span>
               </span>
               <span className="facility-metrics">
-                <span><small>RACKS</small><strong>{String(dataCenter.rackCount).padStart(2, '0')}</strong></span>
-                <span><small>SERVERS</small><strong>{String(dataCenter.serverCount).padStart(2, '0')}</strong></span>
+                <span><small>RACKS</small><strong>{String(rackCount).padStart(2, '0')}</strong></span>
+                <span><small>SERVERS</small><strong>{String(serverCount).padStart(2, '0')}</strong></span>
                 <span><small>TEMP</small><strong>{dataCenter.temperature.toFixed(1)}<em>°C</em></strong></span>
-                <span className={dataCenter.alerts > 0 ? 'has-alert' : ''}>
-                  <small>ALERTS</small><strong>{String(dataCenter.alerts).padStart(2, '0')}</strong>
+                <span className={alerts > 0 ? 'has-alert' : ''}>
+                  <small>ALERTS</small><strong>{String(alerts).padStart(2, '0')}</strong>
                 </span>
               </span>
               <span className="facility-enter" aria-hidden="true">ENTER <i>→</i></span>
@@ -1849,6 +1791,7 @@ function DataCenterDashboard({
   onToggle,
   onSelectIncident,
   dataCenter,
+  racks,
   metrics,
   incidentRecords,
   activeIncidentServerId,
@@ -1858,6 +1801,7 @@ function DataCenterDashboard({
   onToggle: () => void
   onSelectIncident: (rack: RackData, server: ServerData) => void
   dataCenter: DataCenterData
+  racks: RackData[]
   metrics: DashboardMetrics
   incidentRecords: Record<string, IncidentRecord>
   activeIncidentServerId: string | null
@@ -1878,7 +1822,7 @@ function DataCenterDashboard({
     'hpe-proliant-dl360-gen11': '#7b8cff',
     'cisco-ucs-c240-m7': '#bb79ff',
   }
-  const temperatureHistory = useMemo(() => createTemperatureHistory(dataCenter, racks), [dataCenter])
+  const temperatureHistory = useMemo(() => createTemperatureHistory(dataCenter, racks), [dataCenter, racks])
 
   return (
     <>
@@ -2039,6 +1983,8 @@ function App() {
     }
   })
   const [selectedDataCenter, setSelectedDataCenter] = useState<DataCenterData | null>(null)
+  const [view, setView] = useState<'monitor' | 'editor'>('monitor')
+  const [racks, setRacks] = useState<RackData[]>([])
   const [focusedRack, setFocusedRack] = useState<RackData | null>(null)
   const [selectedServer, setSelectedServer] = useState<ServerData | null>(null)
   const [dashboardOpen, setDashboardOpen] = useState(false)
@@ -2047,8 +1993,8 @@ function App() {
   const [incidentRecords, setIncidentRecords] = useState<Record<string, IncidentRecord>>(() => ({ ...initialIncidentRecords }))
   const serverCount = racks.reduce((total, rack) => total + rack.servers.length, 0)
   const focusedRackMetrics = useMemo(() => focusedRack ? getRackMetrics(focusedRack) : null, [focusedRack])
-  const dashboardMetrics = useMemo(() => getDashboardMetrics(racks), [])
-  const heatmapDataset = useMemo(() => getHeatmapDataset(racks, heatmapMode), [heatmapMode])
+  const dashboardMetrics = useMemo(() => getDashboardMetrics(racks), [racks])
+  const heatmapDataset = useMemo(() => getHeatmapDataset(racks, heatmapMode), [racks, heatmapMode])
   const activeHeatmapMode = heatmapMode === 'normal' ? null : heatmapMode
   const activeIncidentIndex = selectedServer
     ? dashboardMetrics.alerts.findIndex(({ server }) => server.id === selectedServer.id)
@@ -2066,6 +2012,22 @@ function App() {
   }, [theme])
 
   const toggleTheme = () => setTheme((current) => current === 'dark' ? 'light' : 'dark')
+
+  const handleSelectDataCenter = (dataCenter: DataCenterData) => {
+    setRacks(getRacksForDataCenter(dataCenter.id))
+    setSelectedDataCenter(dataCenter)
+  }
+  const handleEditorSave = (nextRacks: RackData[]) => {
+    setRacks(nextRacks)
+    const nextFocusedRack = focusedRack ? nextRacks.find((rack) => rack.id === focusedRack.id) ?? null : null
+    const nextSelectedServer = nextFocusedRack && selectedServer
+      ? nextFocusedRack.servers.find((server) => server.id === selectedServer.id) ?? null
+      : null
+    setFocusedRack(nextFocusedRack)
+    setSelectedServer(nextSelectedServer)
+    if (!nextSelectedServer) setIncidentMode(false)
+    setView('monitor')
+  }
 
   const clearFocus = () => {
     setFocusedRack(null)
@@ -2115,7 +2077,19 @@ function App() {
   }
 
   if (!selectedDataCenter) {
-    return <DataCenterLobby onSelect={setSelectedDataCenter} theme={theme} onToggleTheme={toggleTheme} />
+    return <DataCenterLobby onSelect={handleSelectDataCenter} theme={theme} onToggleTheme={toggleTheme} />
+  }
+
+  if (view === 'editor') {
+    return (
+      <LayoutEditor
+        dataCenter={{ id: selectedDataCenter.id, code: selectedDataCenter.code, name: selectedDataCenter.name }}
+        initialRacks={racks}
+        theme={theme}
+        onSave={handleEditorSave}
+        onCancel={() => setView('monitor')}
+      />
+    )
   }
 
   return (
@@ -2135,6 +2109,23 @@ function App() {
           <span>{selectedDataCenter.code} · 3D RACK VISUALIZATION</span>
         </div>
         <AssetSearch rackData={racks} onSelectRack={handleFocusRack} onSelectServer={handleSelectServer} />
+        <button
+          className="theme-toggle layout-edit-button"
+          type="button"
+          onClick={() => setView('editor')}
+          aria-label="랙 배치 에디터 열기"
+          title="랙 배치 에디터 열기"
+        >
+          <span className="theme-toggle-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <rect x="4" y="4" width="6.6" height="6.6" rx="1.3" />
+              <rect x="13.4" y="4" width="6.6" height="6.6" rx="1.3" />
+              <rect x="4" y="13.4" width="6.6" height="6.6" rx="1.3" />
+              <path d="m14.6 19.9 5.3-5.3 1.6 1.6-5.3 5.3-2.2.6Z" />
+            </svg>
+          </span>
+          <span className="theme-toggle-copy"><small>FLOOR PLAN</small><strong>LAYOUT EDIT</strong></span>
+        </button>
         <ThemeToggle theme={theme} onToggle={toggleTheme} className="rack-theme-toggle" />
         <div className="summary">
           <span><strong>{racks.length}</strong> RACKS</span>
@@ -2164,6 +2155,7 @@ function App() {
             onPointerMissed={clearFocus}
           >
             <DataCenterScene
+              racks={racks}
               focusedRack={focusedRack}
               selectedServer={selectedServer}
               heatmapVisuals={heatmapDataset.visuals}
@@ -2322,6 +2314,7 @@ function App() {
           onToggle={() => setDashboardOpen((current) => !current)}
           onSelectIncident={handleSelectServer}
           dataCenter={selectedDataCenter}
+          racks={racks}
           metrics={dashboardMetrics}
           incidentRecords={incidentRecords}
           activeIncidentServerId={incidentMode ? selectedServer?.id ?? null : null}
