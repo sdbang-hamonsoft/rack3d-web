@@ -1,0 +1,115 @@
+/**
+ * netis-fms 엔드포인트 호출 + rack3d 화면이 쓰는 형태로의 변환.
+ *
+ * 이 파일 밖에서 `api.get('/...')`을 직접 부르지 않는다 — 경로·권한·스코프 규약을 한 곳에 모은다.
+ */
+
+import { ApiError, api, NETWORK_ERROR_STATUS } from './client'
+import type { MeResponse, RackSummary, SidebarNode, SidebarResponse } from './types'
+
+/** `GET /api/auth/me` — 사용자·권한 요약(인증만 필요). */
+export function fetchMe(): Promise<MeResponse> {
+  return api.get<MeResponse>('/auth/me')
+}
+
+/** `GET /api/locations/sidebar` — 위치 트리(인증만 필요, 위치 스코프로 이미 필터됨). */
+export function fetchSidebar(): Promise<SidebarResponse> {
+  return api.get<SidebarResponse>('/locations/sidebar')
+}
+
+/**
+ * `GET /api/zones/{zoneId}/racks` — ZONE 하위 랙 목록 + 환경·전력 집계 (ASSET READ, E19 B1·B5).
+ *
+ * C5 신뢰 경계: `zoneId`는 **sidebar 응답이 준 id만** 넘긴다. 사용자 입력을 그대로 URL에
+ * 끼워 넣지 않도록 정수 여부를 한 번 더 확인한다.
+ */
+export function fetchZoneRacks(zoneId: number): Promise<RackSummary[]> {
+  if (!Number.isInteger(zoneId) || zoneId <= 0) {
+    return Promise.reject(new ApiError(NETWORK_ERROR_STATUS, 'INVALID_ZONE_ID'))
+  }
+  return api.get<RackSummary[]>(`/zones/${zoneId}/racks`)
+}
+
+// ── 사이드바 트리 → 전산실(ZONE) 목록 ────────────────────────────────────────
+
+/** 화면이 쓰는 전산실 1건. 값의 출처는 전부 FMS다(D1) — 여기서 임의 값을 만들지 않는다. */
+export type ZoneSummary = {
+  /** FMS `locations.id` — 이후 모든 ZONE 스코프 호출의 유일한 입력(C5). */
+  id: number
+  name: string
+  /** FMS `locations.code` — 미설정이면 null(화면에서 `—`). */
+  code: string | null
+  /** 상위 위치 경로(건물 > 층). 스코프 사용자면 보이는 조상까지만. */
+  path: string
+  /** 사이드바 트리에 실린 RACK 레이어 자식 수 — 등록된 랙 수. */
+  rackCount: number
+  /** 자기+후손 자산 수. **ASSET READ가 없으면 응답에서 빠지므로 null**(0이 아니다). */
+  totalAssetCount: number | null
+}
+
+/** 사이드바 트리를 훑어 ZONE 레이어 노드만 뽑는다. */
+export function collectZones(roots: SidebarNode[]): ZoneSummary[] {
+  const zones: ZoneSummary[] = []
+
+  const walk = (node: SidebarNode, ancestors: string[]) => {
+    if (node.layer === 'ZONE') {
+      zones.push({
+        id: node.id,
+        name: node.name,
+        code: node.code ?? null,
+        path: ancestors.join(' › '),
+        rackCount: node.children.filter((child) => child.layer === 'RACK').length,
+        totalAssetCount: node.totalAssetCount ?? null,
+      })
+      return // ZONE 아래는 RACK이라 더 내려갈 필요가 없다.
+    }
+    node.children.forEach((child) => walk(child, [...ancestors, node.name]))
+  }
+
+  roots.forEach((root) => walk(root, []))
+  return zones
+}
+
+// ── 에러 → 화면 상태 ─────────────────────────────────────────────────────────
+
+/**
+ * 화면이 분기할 수 있는 에러 종류.
+ *
+ * `forbidden`은 **권한 없음 + 위치 스코프 밖**을 함께 담는다: FMS는 스코프 밖 응답을
+ * 엔드포인트마다 다르게 준다(`racks`·`series/zone`은 404, `overview`는 200 + 빈 집계).
+ * **두 패턴을 모두 "권한 없음"으로 수렴**시켜야 빈 화면을 정상으로 오인하지 않는다(R7).
+ */
+export type ApiFailureKind = 'network' | 'forbidden' | 'unknown'
+
+export type ApiFailure = {
+  kind: ApiFailureKind
+  /** 사용자에게 보여줄 문구. **FMS 응답 원문이 아니라 rack3d가 고른 문장이다**(C8). */
+  message: string
+  /** 429 `Retry-After`(I-7). 폴링이 다음 요청을 이만큼 미룬다. 없으면 null. */
+  retryAfterMs: number | null
+}
+
+/** 서버 응답 원문을 쓰지 않고 status/code만으로 표시 문구를 고른다(C8). */
+export function describeFailure(error: unknown): ApiFailure {
+  const plain = (kind: ApiFailureKind, message: string): ApiFailure => ({ kind, message, retryAfterMs: null })
+
+  if (!(error instanceof ApiError)) return plain('unknown', '데이터를 불러오지 못했습니다.')
+  // 프로그래밍 오류(잘못된 id 등)를 "네트워크를 확인하세요"로 표시하면 원인 추적이 어긋난다.
+  if (error.code === 'INVALID_ZONE_ID') return plain('unknown', '조회할 전산실을 확인하지 못했습니다.')
+  if (error.status === NETWORK_ERROR_STATUS) {
+    return error.code === 'TIMEOUT'
+      ? plain('network', 'netis-fms 응답이 없어 요청을 중단했습니다.')
+      : plain('network', 'netis-fms에 연결하지 못했습니다. 네트워크 상태를 확인하세요.')
+  }
+  if (error.status === 403 || error.status === 404) {
+    return plain('forbidden', '이 전산실을 볼 권한이 없거나 조회 범위에 포함되어 있지 않습니다.')
+  }
+  if (error.status === 429) {
+    // 실제 대기는 이 값과 폴링 하한 중 **긴 쪽**이라 여기서 초를 문구에 박으면 거짓이 된다
+    // (Retry-After: 0이면 "0초 후"라고 말하고 실제로는 30초 뒤에 간다).
+    // 남은 시간은 폴링 훅이 실제 스케줄에서 계산해 화면에 카운트다운으로 보여준다.
+    const retryAfterMs = error.retryAfterSeconds !== null ? error.retryAfterSeconds * 1000 : null
+    return { kind: 'unknown', message: '요청이 많아 잠시 후 다시 시도합니다.', retryAfterMs }
+  }
+  return plain('unknown', '데이터를 불러오지 못했습니다.')
+}

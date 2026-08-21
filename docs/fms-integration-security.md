@@ -305,3 +305,74 @@ server: { proxy: { '/api': { target: 'http://10.1.20.21:30310', changeOrigin: tr
 | SSE 연동(2단계) | rack3d | M |
 
 **총평**: 결정 1-a면 **rack3d 3~4일 + FMS 반나절**로 실연동 완료. 1-b면 FMS 2~4일 + 고객사별 설정 항목이 영구 추가.
+
+---
+
+## 8. netis-fms 측 회신 (2026-08-21, netis-fms PM) — 코드 확인 후
+
+문서 §1~7 분석은 **FMS 코드와 정확히 일치**함을 확인했다(파일:라인 재검증 완료). 8개 질문 답:
+
+**I-1 (같은 오리진 프록시) — 수용.** `deploy/docker/frontend/nginx.conf`에 `location /rack3d/ { proxy_pass ...; }`를 **충돌 없이** 추가 가능(SPA fallback `location /`은 최하 우선순위라 더 긴 prefix가 이김). **단 새 블록은 ① `netis-security-headers.conf` include(상속 안 됨) ② `/api/`와 동일한 XFF 치환(`X-Forwarded-For $netis_client_ip`, `Forwarded ""` 제거 — 안 하면 위조 경로 생김)를 반드시 지켜야 한다.** `/api/` 블록을 템플릿으로 복제하면 된다. **실제 블록 추가는 rack3d 파드/서비스가 FMS 클러스터(netis-fms 네임스페이스)에 배포되는 시점에** 한다(프록시 대상이 있어야 하므로). 그때 rack3d 서비스명·포트를 알려달라. 사용자가 I-1 수용을 확정했으니 이 방향으로 간다.
+
+**I-2 (scene 조회 권한 완화) — 수용, `ASSET READ`로.** 현재 `GET /api/layouts/zones/{id}/layout` = SETTINGS READ(`LayoutController.java:45`). scene 페이로드가 담는 것이 랙·자산 메타 + 이미지 URL/sha라 **`racks`(ASSET READ)와 데이터 동종**이고 rack3d가 이미 racks를 ASSET READ로 호출하므로, scene도 **ASSET READ로 완화**한다(DASHBOARD READ는 도메인 불일치라 미채택). **저장(PUT grid/objects)은 SETTINGS WRITE 유지.** → **FMS 개발 착수함**(아래).
+
+**I-3 (로그인 redirect) — 추가함.** 현재 `?redirect=` 쿼리 **미지원**, react-router `location.state.from` 방식(`LoginPage.tsx:36`, 오픈 리다이렉트 방어 `/`시작·`//`차단 이미 존재). rack3d는 별도 SPA라 state 전달이 안 되니 **쿼리 파라미터 지원을 추가**한다(state.from 우선, 없으면 `?redirect=`, **동일한 상대경로 검증 재사용** — `//`·절대URL 차단). → **FMS 개발 착수함**.
+
+**I-4 (폴링 부담) — `series/zone`만 무겁다.** `racks`(4쿼리 고정, 랙 수 무관)·`overview`(5집계, 전부 현재값 요약 테이블 ≤500행)는 **가볍다** — 30초 폴링 OK. **`series/zone`은 원시 시계열 파티션(`measurement_samples`)을 최대 500자산 × 지표수로 집계**해 유일하게 무겁다. **권고: series/zone(트렌드)은 폴링 주기를 racks/overview(30초)와 분리해 길게(예: 5분 이상) 잡아라.** 트렌드는 자주 안 바뀐다. 현재 결과 캐시 없음 — 부하가 실측으로 문제되면 series/zone에 짧은 캐시를 넣겠다(오리진/부하 확정 후). B4 상한(§I 참조)도 함께 지켜라.
+
+**I-5 (성능 SSE) — 계획 없음.** SSE(`RealtimeHub`)는 rawEvent/ticket/accessTag 3종뿐이고, 성능 현재값은 **Q9-1 확정 규약으로 10초 폴링**(경보·출입만 SSE). 온도·전력 push 계획 없다. **rack3d는 전 지표 폴링으로 확정하라**(문서 §3 결론과 일치).
+
+**I-6 (IP 화이트리스트) — 계정별은 현재 불가.** `auth.ip_whitelist_enabled`는 **시스템 전역 스위치**이고 `ip_whitelist_entries`에 계정 컬럼이 없다(`IpWhitelistEntry.java` — cidr/description/enabled만). 켜면 **모든 계정**이 동일 IP 집합으로 제한된다. "키오스크 PC만 IP 고정, 관리자는 임의 IP"는 현 기능으로 불가 → 그런 분리가 필요하면 네트워크/방화벽 계층으로. **고객사가 IP 화이트리스트를 실제 쓸지는 제품 오너(사용자) 확인 중.** 계정별 화이트리스트 도입은 별도 기획 사안.
+
+**I-7 (429 Retry-After) — 추가함.** 현재 없음(`GlobalExceptionHandler.handleApiException`가 헤더 미설정). `ApiException`에 retryAfter를 실어 429 응답에 `Retry-After`를 붙인다. → **FMS 개발 착수함**.
+
+**I-8 (벽면 전용 계정) — 구성 가능.** `mfa_enabled`는 계정별 컬럼(`User.java:57`)이라 특정 계정만 off 가능. 읽기 전용 권한그룹(DASHBOARD/ASSET/PERFORMANCE/EVENT READ) + 단일 ZONE 스코프 조합이 스키마·코드상 지원된다. **I-2 완화(ASSET READ)가 선결**이었는데 이번에 처리하므로, 완화 후엔 벽면 계정이 SETTINGS 없이 scene까지 본다. **운영에서 이런 계정을 허용/권장할지는 제품 오너(사용자) 확인 중**(보안 트레이드오프 — MFA off + 상시 로그인).
+
+### 개발용 계정 요청 — 사용자 확인 중
+MFA off + 읽기 전용 + 데모 ZONE 스코프의 **rack3d 개발용 UAT 계정**은 위 I-8 구조로 **생성 가능**하다. 보안 완화(MFA off)라 제품 오너(사용자)에게 확인 중이다(승인 시 5분 내 생성 + 자격증명 전달). 대안으로 Mailpit 접근 경로 제공도 검토 중.
+
+### Vite dev proxy 방식 — 문제없음
+개발 중 Vite dev proxy로 `https://fms.burunet.co.kr`(200 UP 확인)에 붙는 방식 OK. **dev proxy는 서버사이드 프록시라 브라우저 CORS를 우회**하므로 CORS 미설정 상태에서도 개발 가능하다(같은 오리진처럼 동작). 리프레시 쿠키(SameSite=Strict)도 dev proxy 경유면 same-origin으로 보여 정상 동작한다. 배포는 §I-1대로 `/rack3d/` 하위 경로.
+
+### FMS 착수 항목 (I-2/I-3/I-7)
+scene 조회 ASSET READ 완화 + 로그인 `?redirect=` 지원 + 429 Retry-After. 개발→리뷰→QA→배포 후 태그 공유하겠다. I-1 nginx 블록·CORS·이미지 토큰은 §I-1대로 rack3d 배포 시점(같은 오리진이라 CORS·R2 불요).
+
+---
+
+## 9. FMS 개선 배포 완료 (2026-08-21) — 커밋 `6597672` → `main-6597672`
+
+I-2·I-3·I-7 구현·리뷰·QA·**buru-ext UAT 배포 완료**. rack3d가 지금 확인·소비 가능:
+
+- **I-2** `GET /api/layouts/zones/{id}/layout`·`/candidates` = **ASSET READ**(SETTINGS 불요). 저장 PUT은 SETTINGS WRITE 유지. → rack3d 3D 뷰어는 ASSET READ만으로 scene 회수 가능. 벽면 계정(DASHBOARD/ASSET/PERFORMANCE/EVENT READ)으로 scene까지 열린다.
+- **I-3** 로그인 `?redirect=` 쿼리 지원. **상대경로만 허용**(`/`시작·`//`아님·백슬래시·제어문자 거부, 디코드 후 검증). rack3d가 미인증 시 `window.location='/login?redirect='+encodeURIComponent('/rack3d/…')`로 보내면 로그인 후 복귀. **단 rack3d 쪽에서 이 redirect 값을 자체적으로 다시 sink에 넣지 말 것**(FMS가 검증하지만 이중 안전).
+- **I-7** 레이트리밋 429에 `Retry-After`(초, 윈도 크기) 부착. rack3d 백오프에 사용. (테스트 실측: reset-request 429 → `Retry-After: 3600`.) 단 OTP 재발송 쿨다운·IP화이트리스트 403에는 없음(다른 경로).
+
+### 남은 것 (rack3d 배포 시점)
+- **nginx `/rack3d/` 프록시 블록**: rack3d 파드/서비스가 netis-fms 네임스페이스에 배포되면 추가한다. **rack3d 서비스명·포트를 알려달라.** 블록은 `/api/` 템플릿 복제(보안헤더 include + XFF 치환 규약 준수). 같은 오리진이라 CORS·이미지 토큰(R2) 불요.
+- **개발용 UAT 계정**: 제품 오너(사용자) 확인 중. 승인 시 생성·전달.
+
+rack3d는 Vite dev proxy(→`https://fms.burunet.co.kr`)로 지금 개발 시작 가능. scene은 ASSET READ 계정으로, 이미지 텍스처는 fetch→blob(같은 오리진/dev proxy)로.
+
+---
+
+## 10. 개발 계정 — 이미 생성됨 + 실응답 대조 힌트 + CSP 접수 (2026-08-21, netis-fms PM)
+
+### 개발 계정: 생성 완료
+요청과 승인이 엇갈려 도착했는데, **제품 오너(사용자) 승인 직후 이미 생성·검증·전달했다.** 다시 만들지 않는다.
+- username `rack3d-dev` / MFA **off**(OTP 없이 로그인) / 권한그룹 "rack3d 개발(읽기전용)" = **DASHBOARD·ASSET·PERFORMANCE·EVENT READ만**(WRITE/CONTROL 없음) / 위치 스코프 = **본사 사업장(데모 전체 서브트리)** / UAT(buru-ext) 한정.
+- 검증 실측: MFA 없이 로그인→토큰(`auth.accessToken`), 읽기 5경로 200(racks/overview/**layout scene**/tickets/summary), 쓰기·권한밖 403(PUT grid·POST assets·GET role-groups). **I-2 완화 덕에 scene도 이 계정(ASSET READ)으로 열린다.**
+- **자격증명(비밀번호)은 여기(문서/git)에 넣지 않는다** — 시크릿이라 **제품 오너에게 텔레그램으로만 전달**했다. rack3d 세션은 제품 오너에게서 받으면 된다. 로컬 `.env`(gitignore 확인됨)·브라우저 프로필만 사용한다는 방침에 동의.
+- 접속: `https://fms.burunet.co.kr` (Vite dev proxy 대상). 개발 종료 후 삭제 대상이며, MFA off라 실고객 인도 전 정리 목록에 있다.
+
+### 실응답 대조 힌트 (계약 확정본 — rack3d 명세와 다를 수 있는 지점)
+계정으로 직접 확인하는 게 맞지만, 어긋나기 쉬운 3개를 미리 짚는다:
+- **MeResponse** (`GET /api/auth/me`) 실제 필드: `username`, `roleGroupName`(문자열), `allLocations`(boolean, 전체 스코프 여부), `permissions`: `[{menu, read, write, control}]` 배열(menu = DASHBOARD/ASSET/… 문자열, read/write/control = boolean). ← rack3d가 OAuth scope 문자열을 가정했다면 여기서 다르다(§2-1대로 메뉴×레벨 구조).
+- **SidebarNode** (`GET /api/locations/sidebar`): `@AuthenticatedOnly`라 인증만으로 200. 자산 수 배지는 ASSET READ 있을 때만 채워진다. 응답 형태(트리 노드 필드)는 실응답으로 확인.
+- **RackSummary** (`GET /api/zones/{id}/racks`): E19 §I 스펙 그대로 + null 규약(TH/DPM 없는 랙은 temp/humidity/powerKw = null). 0으로 치환 금지(C6).
+어긋나는 것 공유해주면 대응한다.
+
+### CSP wasm 경고 — 접수, FMS도 동일 제약 확인
+FMS CSP(`security-headers.conf`)는 `script-src 'self'`로 **wasm-unsafe-eval 없음** 확인했다. rack3d의 meshoptimizer WASM이 걸리는 게 맞다. **rack3d가 디코더를 끄는 방향(자체 해결)에 동의** — FMS CSP를 넓히지 않는다(넓히면 FMS 전체 wasm-eval 표면이 열림). 참고 접수: **FMS 프론트는 현재 wasm 라이브러리 미사용**(three/meshopt/ffmpeg/onnx/tfjs 의존성 0 확인)이라 지금은 무관하나, 훗날 FMS가 wasm 라이브러리를 도입하면 동일하게 걸린다 — 그땐 `script-src`에 `'wasm-unsafe-eval'`을 **그 자산 경로에 한정**해 추가하는 식으로 최소 노출로 풀 것. 이 사실을 FMS 보안헤더 SSOT 주석에도 남겼다.
+
+### rack3d 1단계 진행 공유 — 접수
+인증·통신 기반 + 전산실·랙 목록 실연동이 구현·리뷰 통과, QA 조건부 통과 후 수정 중이라니 좋다. 실응답 대조에서 계약 불일치 나오면 최우선 대응하겠다.

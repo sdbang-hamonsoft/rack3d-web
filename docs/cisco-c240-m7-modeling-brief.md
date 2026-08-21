@@ -41,7 +41,8 @@
 ## 5. 익스포트
 - glTF 2.0 Binary(.glb), Y-up, +Z front(기존 모델 방향에 맞춤).
 - 파일: `public/models/cisco-ucs-c240-m7.glb` 로 덮어쓰기 전
-  기존 파일을 `cisco-ucs-c240-m7.prev.glb`로 백업.
+  기존 파일을 `artifacts/model-variants/cisco-ucs-c240-m7.prev.glb`로 백업.
+  (`public/`은 빌드 산출물에 그대로 복사되므로 백업본을 거기 두면 운영 이미지에 실린다.)
 - 익스포트 후 `npm run dev`로 랙 안에서 크기·방향 육안 확인.
 
 ## 참고 실측치 (근사, 검증 후 사용)

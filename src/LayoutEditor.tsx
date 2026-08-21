@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import {
   GRID_COLUMNS,
   GRID_ROWS,
   cloneRackList,
   degreesToRadians,
-  getSeedRacks,
+  autoArrangeRacks,
   radiansToDegrees,
   saveRacksForDataCenter,
 } from './rackLayouts'
@@ -17,7 +17,7 @@ const COMPACT_CELL_SIZE = 40
 
 type ThemeMode = 'dark' | 'light'
 type RackFacing = 'bottom' | 'right' | 'top' | 'left'
-type ArmedAction = 'delete' | 'reset' | 'cancel'
+type ArmedAction = 'reset' | 'cancel'
 
 type DragState = {
   rackId: string
@@ -45,21 +45,6 @@ function getRackFacing(rotation: number): RackFacing {
   return 'bottom'
 }
 
-function createRackLabel(racks: RackData[]) {
-  const usedLabels = new Set(racks.map((rack) => rack.label.trim().toUpperCase()))
-  let sequence = 1
-  while (usedLabels.has(`R-${String(sequence).padStart(2, '0')}`)) sequence += 1
-  return `R-${String(sequence).padStart(2, '0')}`
-}
-
-function createRackId(dataCenterId: string, racks: RackData[]) {
-  const shortName = dataCenterId.split('-')[0] || dataCenterId
-  const usedIds = new Set(racks.map((rack) => rack.id))
-  let sequence = racks.length + 1
-  while (usedIds.has(`rack-${shortName}-${String(sequence).padStart(2, '0')}`)) sequence += 1
-  return `rack-${shortName}-${String(sequence).padStart(2, '0')}`
-}
-
 function LayoutEditor({
   dataCenter,
   initialRacks,
@@ -70,14 +55,12 @@ function LayoutEditor({
   dataCenter: { id: string; code: string; name: string }
   initialRacks: RackData[]
   theme: ThemeMode
-  onSave: (racks: RackData[]) => void
+  onSave: () => void
   onCancel: () => void
 }) {
   const [draft, setDraft] = useState<RackData[]>(() => cloneRackList(initialRacks))
   const [selectedRackId, setSelectedRackId] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
-  const [placing, setPlacing] = useState(false)
-  const [ghostCell, setGhostCell] = useState<{ x: number; z: number } | null>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
   const [snapback, setSnapback] = useState<SnapbackState | null>(null)
   const [armedAction, setArmedAction] = useState<ArmedAction | null>(null)
@@ -100,12 +83,6 @@ function LayoutEditor({
     draft.forEach((rack) => tiles.set(`${rack.tileX}:${rack.tileZ}`, rack.id))
     return tiles
   }, [draft])
-  const duplicateLabel = useMemo(() => {
-    if (!selectedRack) return false
-    const normalized = selectedRack.label.trim().toUpperCase()
-    return normalized.length > 0
-      && draft.some((rack) => rack.id !== selectedRack.id && rack.label.trim().toUpperCase() === normalized)
-  }, [draft, selectedRack])
 
   useEffect(() => {
     dragRef.current = drag
@@ -163,15 +140,6 @@ function LayoutEditor({
     return { x, z }
   }
 
-  const placeNewRack = (x: number, z: number) => {
-    const id = createRackId(dataCenter.id, draft)
-    const label = createRackLabel(draft)
-    mutateDraft((current) => [
-      ...current,
-      { id, label, totalUnits: 42, tileX: x, tileZ: z, rotation: 0, servers: [] },
-    ])
-  }
-
   const moveSelectedRack = (deltaX: number, deltaZ: number) => {
     if (!selectedRack) return
     const nextX = selectedRack.tileX + deltaX
@@ -192,24 +160,6 @@ function LayoutEditor({
     )))
   }
 
-  const deleteRack = (rackId: string) => {
-    mutateDraft((current) => current.filter((rack) => rack.id !== rackId))
-    selectRack(null)
-  }
-
-  const requestDeleteSelectedRack = () => {
-    if (!selectedRack || saved) return
-    if (selectedRack.servers.length === 0) {
-      deleteRack(selectedRack.id)
-      return
-    }
-    if (armedAction === 'delete') {
-      deleteRack(selectedRack.id)
-      return
-    }
-    arm('delete')
-  }
-
   const requestReset = () => {
     if (saved) return
     if (armedAction !== 'reset') {
@@ -217,11 +167,11 @@ function LayoutEditor({
       return
     }
     disarm()
-    setDraft(getSeedRacks(dataCenter.id))
+    // 랙 목록은 netis-fms가 SSOT다 — 초기화는 "랙을 지우는 것"이 아니라
+    // 현재 랙을 기본 격자에 다시 놓는 것이다.
+    setDraft(autoArrangeRacks(draft))
     setDirty(true)
     setSelectedRackId(null)
-    setPlacing(false)
-    setGhostCell(null)
   }
 
   const requestCancel = () => {
@@ -241,8 +191,6 @@ function LayoutEditor({
   const handleSave = () => {
     if (!dirty || saved) return
     disarm()
-    setPlacing(false)
-    setGhostCell(null)
     if (!saveRacksForDataCenter(dataCenter.id, draft)) {
       // 영속화 실패 — 성공으로 위장하지 않고 UNSAVED 상태를 유지한 채 경고를 띄운다.
       setSaveFailed(true)
@@ -253,19 +201,12 @@ function LayoutEditor({
     setSaved(true)
     savedTimer.current = window.setTimeout(() => {
       savedTimer.current = null
-      onSave(draft)
+      onSave()
     }, SAVED_FLASH_DURATION)
   }
 
-  const togglePlacing = () => {
-    if (saved) return
-    selectRack(null)
-    setGhostCell(null)
-    setPlacing((current) => !current)
-  }
-
   const startDrag = (rack: RackData, clientX: number, clientY: number) => {
-    if (saved || placing || snapback) return
+    if (saved || snapback) return
     const tile = tileFromPointer(clientX, clientY)
     if (!tile) return
     selectRack(rack.id)
@@ -346,25 +287,12 @@ function LayoutEditor({
       if (saved) return
 
       if (event.key === 'Escape') {
-        if (placing) {
-          setPlacing(false)
-          setGhostCell(null)
-        } else if (armedAction) {
-          disarm()
-        } else if (selectedRackId) {
-          selectRack(null)
-        }
+        if (armedAction) disarm()
+        else if (selectedRackId) selectRack(null)
         return
       }
       if (event.key === 'r' || event.key === 'R') {
         rotateSelectedRack()
-        return
-      }
-      if (event.key === 'Delete' || event.key === 'Backspace') {
-        if (selectedRackId) {
-          event.preventDefault()
-          requestDeleteSelectedRack()
-        }
         return
       }
       if (!selectedRackId || drag) return
@@ -378,11 +306,6 @@ function LayoutEditor({
     return () => window.removeEventListener('keydown', handleKeyDown)
   })
 
-  const handleBoardPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!placing) return
-    setGhostCell(tileFromPointer(event.clientX, event.clientY))
-  }
-
   const handleBoardClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (saved) return
     if (suppressBoardClick.current) {
@@ -391,14 +314,9 @@ function LayoutEditor({
     }
     const tile = tileFromPointer(event.clientX, event.clientY)
     if (!tile) return
-    if (placing) {
-      if (isTileFree(tile.x, tile.z)) placeNewRack(tile.x, tile.z)
-      return
-    }
     if (isTileFree(tile.x, tile.z)) selectRack(null)
   }
 
-  const ghostInvalid = ghostCell ? !isTileFree(ghostCell.x, ghostCell.z) : false
   const compactBoard = cellSize < COMPACT_CELL_SIZE
   const cells = useMemo(() => Array.from({ length: GRID_COLUMNS * GRID_ROWS }, (_, index) => ({
     x: index % GRID_COLUMNS,
@@ -460,11 +378,9 @@ function LayoutEditor({
             </div>
             <div
               ref={boardRef}
-              className={`layout-editor-board${compactBoard ? ' compact' : ''}${placing ? ' placing' : ''}`}
+              className={`layout-editor-board${compactBoard ? ' compact' : ''}`}
               role="group"
               aria-label="18 × 14 랙 배치 그리드"
-              onPointerMove={handleBoardPointerMove}
-              onPointerLeave={() => setGhostCell(null)}
               onClick={handleBoardClick}
             >
               {cells.map(({ x, z }) => (
@@ -511,7 +427,7 @@ function LayoutEditor({
                       event.preventDefault()
                       startDrag(rack, event.clientX, event.clientY)
                     }}
-                    onClick={() => { if (!placing && !saved) selectRack(rack.id) }}
+                    onClick={() => { if (!saved) selectRack(rack.id) }}
                     aria-pressed={selectedRackId === rack.id}
                     aria-label={`랙 ${rack.label}, X ${rack.tileX}, Z ${rack.tileZ}, 서버 ${rack.servers.length}대, 선택`}
                     title={`${rack.label} · X ${rack.tileX} / Z ${rack.tileZ}`}
@@ -524,15 +440,6 @@ function LayoutEditor({
                   </button>
                 )
               })}
-              {placing && ghostCell && (
-                <div
-                  className={`layout-editor-rack ghost${ghostInvalid ? ' invalid' : ''}`}
-                  style={{ gridColumn: ghostCell.x + 1, gridRow: ghostCell.z + 1 }}
-                  aria-hidden="true"
-                >
-                  <span className="layout-editor-rack-name">NEW</span>
-                </div>
-              )}
             </div>
           </div>
 
@@ -548,25 +455,19 @@ function LayoutEditor({
           {selectedRack ? (
             <>
               <p className="panel-title">RACK PROPERTIES</p>
-              <label className="incident-field layout-editor-label-field">
-                <span>
-                  LABEL
-                  {duplicateLabel && <small className="layout-editor-label-warn">중복 라벨</small>}
-                </span>
-                <input
-                  value={selectedRack.label}
-                  type="text"
-                  maxLength={12}
-                  onChange={(event) => {
-                    if (saved) return
-                    const nextLabel = event.target.value
-                    mutateDraft((current) => current.map((rack) => (
-                      rack.id === selectedRack.id ? { ...rack, label: nextLabel } : rack
-                    )))
-                  }}
-                  aria-label="랙 라벨 편집"
-                />
-              </label>
+              {/*
+                랙 이름은 netis-fms `locations.name`이 SSOT다(D1).
+                여기서 고쳐 저장해도 3D 씬은 FMS 목록으로 라벨을 다시 채우므로 조용히 버려졌다 —
+                입력 → 저장 → 무시의 dead path였고 UI만 "SAVED"라고 말했다.
+                추가·삭제를 뺀 것과 같은 이유로 **읽기 전용**으로 바꾼다.
+              */}
+              <div className="incident-field layout-editor-label-field">
+                <span>LABEL</span>
+                <output aria-label="랙 라벨">{selectedRack.label}</output>
+              </div>
+              <p className="layout-editor-source-note">
+                랙 이름은 netis-fms에서 관리합니다. 여기서는 배치(이동·회전)만 바꿉니다.
+              </p>
 
               <section className="server-location-grid" aria-label="랙 배치 좌표">
                 <div><span>GRID X</span><strong>{selectedRack.tileX}</strong></div>
@@ -574,22 +475,18 @@ function LayoutEditor({
                 <div><span>FACING</span><strong>{facingGlyphs[getRackFacing(selectedRack.rotation)]} {radiansToDegrees(selectedRack.rotation)}°</strong></div>
               </section>
 
+              {/*
+                랙 크기·장착 수는 netis-fms가 SSOT다.
+                `totalUnits`는 3D 지오메트리용 폴백(미설정 시 42U)이라 여기 그대로 쓰면
+                크기 미설정 랙에 42U를 지어내게 된다 — 원값 `rackUnits`를 쓰고 없으면 `—`(C6).
+                장착 장비 수도 랙 U맵 미연동이라 항상 0이므로 표시하지 않는다.
+              */}
               <span className="layout-editor-rack-meta">
-                SERVERS {selectedRack.servers.length} INSTALLED · {selectedRack.totalUnits}U
+                RACK SIZE {selectedRack.rackUnits ?? '—'}U
               </span>
 
               <button className="overview-button layout-editor-rotate" type="button" onClick={rotateSelectedRack}>
                 <span aria-hidden="true">⟳</span> ROTATE 90°
-              </button>
-
-              <div className="layout-editor-divider" aria-hidden="true" />
-
-              <button
-                className={`incident-acknowledge layout-editor-danger${armedAction === 'delete' ? ' armed' : ''}`}
-                type="button"
-                onClick={requestDeleteSelectedRack}
-              >
-                {armedAction === 'delete' ? '정말 삭제합니까? · CONFIRM' : '✕ 랙 삭제'}
               </button>
 
               <div className="mouse-tip">드래그: 이동 · 화살표: 1타일 이동 · 빈 타일 클릭: 선택 해제</div>
@@ -599,27 +496,26 @@ function LayoutEditor({
               <p className="panel-title">LAYOUT EDITOR</p>
               <div className="mouse-tip layout-editor-help">
                 랙을 클릭해 선택하고, 드래그해 다른 타일로 이동할 수 있습니다.
-                {placing ? ' 빈 타일을 클릭할 때마다 새 랙이 추가됩니다. 원하는 만큼 배치한 뒤 Esc 또는 아래 버튼으로 마치세요.' : ' 새 랙은 아래 버튼으로 추가하세요.'}
               </div>
+              {/*
+                랙 집합의 SSOT는 netis-fms다(D1) — 여기서 추가한 랙은 저장해도 3D 씬이
+                FMS 목록만 신뢰하므로 나타나지 않는다. 그래서 추가·삭제 경로를 걷어내고
+                **좌표 편집(이동·회전·라벨)만** 남겼다. 좌표는 E18 연동 전까지 rack3d가
+                로컬로 관리하는 유일한 데이터다.
+              */}
+              <p className="layout-editor-source-note">
+                랙 추가·삭제는 netis-fms 자산 관리에서 합니다. 여기서는 배치(이동·회전)만 바꿉니다.
+              </p>
               <div className="key-row"><kbd>Esc</kbd><span>선택 해제 / 취소</span></div>
               <div className="key-row"><kbd>R</kbd><span>90° 회전</span></div>
-              <div className="key-row"><kbd>Del</kbd><span>랙 삭제</span></div>
               <div className="key-row"><kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd><span>1타일 이동</span></div>
 
-              <button
-                className={`layout-editor-add${placing ? ' active' : ''}`}
-                type="button"
-                onClick={togglePlacing}
-                aria-pressed={placing}
-              >
-                {placing ? '배치 종료 (Esc)' : '+ 랙 추가'}
-              </button>
               <button
                 className={`overview-button layout-editor-warn${armedAction === 'reset' ? ' armed' : ''}`}
                 type="button"
                 onClick={requestReset}
               >
-                {armedAction === 'reset' ? '현재 배치를 버립니다 · CONFIRM' : '⟲ 기본 배치로 초기화'}
+                {armedAction === 'reset' ? '현재 배치를 버립니다 · CONFIRM' : '⟲ 자동 배치로 초기화'}
               </button>
 
               <span className="layout-editor-grid-caption">18 × 14 GRID · TILE 0.6m</span>

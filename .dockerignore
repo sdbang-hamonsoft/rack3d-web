@@ -3,7 +3,17 @@ dist
 .git
 .gitignore
 *.md
+# 파인더 메타는 어느 깊이에 있든 제외한다 — public/.DS_Store가 dist로 복사돼
+# 운영에서 `/rack3d/.DS_Store`로 그대로 서빙됐다(파일명 목록 노출).
+**/.DS_Store
 .DS_Store
+# 로컬 시크릿은 빌더 스테이지 레이어에도 남기지 않는다.
+# 최종 이미지엔 안 들어가지만, 빌더 레이어가 캐시·레지스트리에 남으면 키가 따라간다.
+.env
+.env.*
+!.env.example
+# 개발용 도구 — 운영 이미지에 넣지 않는다(scripts/dev/README.md가 이 제외를 전제한다).
+scripts
 .claude
 .codex
 artifacts

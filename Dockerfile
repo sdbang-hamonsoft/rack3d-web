@@ -14,26 +14,10 @@ RUN npm run build
 # Stage 2: Serve with lightweight Nginx
 FROM nginx:alpine
 
-# Custom Nginx configuration for single page application routing and asset caching
-RUN echo 'server { \
-    listen 80; \
-    server_name localhost; \
-    root /usr/share/nginx/html; \
-    index index.html; \
-    \
-    # Always revalidate the SPA entry point so new deployments are picked up \
-    location / { \
-        try_files $uri $uri/ /index.html; \
-        add_header Cache-Control "no-cache"; \
-    } \
-    \
-    # Cache static assets \
-    location ~* \.(?:ico|css|js|gif|jpe?g|png|woff2?|eot|ttf|svg|glb|gltf|bin)$ { \
-        expires 6M; \
-        access_log off; \
-        add_header Cache-Control "public"; \
-    } \
-}' > /etc/nginx/conf.d/default.conf
+# Nginx 설정은 deploy/nginx/ 에 파일로 둔다(인라인 echo 금지 — 리뷰·수정이 어렵다).
+# security-headers.conf 가 보안 응답 헤더의 SSOT다.
+COPY deploy/nginx/security-headers.conf /etc/nginx/snippets/rack3d-security-headers.conf
+COPY deploy/nginx/default.conf /etc/nginx/conf.d/default.conf
 
 # Copy build artifacts from builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html
