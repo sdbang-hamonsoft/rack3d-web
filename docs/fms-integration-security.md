@@ -498,3 +498,27 @@ FMS `location /rack3d/` 가 자기 스니펫을 또 얹으면 **헤더가 2벌**
 - **미해결**: 실제 FMS 응답과의 계약 대조. 지금까지 검증은 전부 문서 기반 스텁(`scripts/dev/fms-stub.mjs`) 기준이다. §10에서 알려준 `rack3d-dev` 계정 자격증명을 제품 오너에게서 받는 대로 최우선으로 대조하고, 어긋나는 것이 있으면 여기에 공유하겠다.
 - 배포 시 참고: 이미지 빌드에 **arm64 node 가 필요하다**(x64 node 면 rolldown 네이티브 바인딩이 없어 `vite build` 실패). 맥미니 빌드 시 `node -p process.arch` 확인 필요.
 - 배포 준비되면 이 절에 "배포 완료 + 이미지 태그"를 남기겠다. 그때 프록시·게이트·메뉴를 붙여달라.
+
+### 11-6. netis-fms PM 수용 회신 (2026-08-22) — 게이트 철회 + 서비스명·헤더 규약 확정
+
+rack3d 회신(§11-5) **전부 수용**한다. 특히 (4) 게이트 문제는 FMS 코드로 직접 검증했다.
+
+**(4) auth_request 게이트 — 철회 확정 ✅.** 지적이 정확하다. `AuthController.java:58-59, 237-242` 확인:
+- 브라우저 세션 자격증명은 `NETIS_RT` 하나뿐, 액세스 토큰 쿠키는 **없음**(Bearer만). refresh 쿠키는 `httpOnly(true).secure().sameSite("Strict").path("/api/auth")`.
+- `/rack3d/` 요청엔 Path 불일치로 `NETIS_RT`가 안 실리고, `auth_request` 서브요청은 원 요청 쿠키를 물려받으니 자격증명 공백 → **로그인 사용자까지 100% 튕김**. 정확한 진단이다.
+- **§11-3의 전제("세션 쿠키가 rack3d의 FMS API 호출에 자동 동반")를 정정한다** — 실제로는 `/api/auth/*`(Path 하위)에만 동반되고, SSO는 **부팅 시 refresh 1회 → accessToken(메모리) → 데이터 API는 Bearer**로 성립한다.
+- (b) 쿠키 Path 확대는 **하지 않는다** — I-3/Path 축소로 좁힌 노출면을 되돌리는 보안 후퇴다. **(a) 게이트 없이 통과**로 간다. rack3d 자체 게이트(refresh 1회 실패 시 안내 화면·데이터 API 0건, QA 실측)로 노출 수준은 FMS가 자기 로그인 셸을 서빙하는 것과 동일 — 수용한다. → **FMS는 `/rack3d/`를 그냥 프록시 통과만 한다.**
+
+**(1) 서비스명 — 확정.** 프록시 대상 = `rack3d-web-np.rack3d.svc.cluster.local:80`. Service 이름 변경 요청 **안 한다**(그대로 `rack3d-web-np` 유지). NodePort 30303은 디버깅용으로 남겨두는 데 동의.
+
+**(2) 프록시 형태 — (a) 접두사 유지 채택 예정.** `location ^~ /rack3d/ { proxy_pass http://rack3d-web-np.rack3d.svc.cluster.local:80; }` (경로 미부가) — FMS `/api/` 템플릿과 형태가 같아 복제가 깔끔. 배포 시점에 최종 확정.
+
+**(3) SPA fallback — FMS는 안 건다.** 그대로 통과. rack3d 컨테이너의 `try_files … /index.html`·`/rack3d`→301·`absolute_redirect off`가 처리. **`Cache-Control` 프록시에서 덮어쓰지 않는다**(no-cache 엔트리/expires 6M 자산 보존).
+
+**(5) 보안 헤더 중복 — (권장)안 채택.** FMS `location /rack3d/`에서 6종(`Content-Security-Policy`·`X-Content-Type-Options`·`X-Frame-Options`·`Referrer-Policy`·`Strict-Transport-Security`·`Permissions-Policy`)을 `proxy_hide_header`로 제거 후 **FMS 보안헤더 스니펫을 include** → 정책 SSOT를 FMS로 일원화. (X-Frame-Options 2벌 시 브라우저 무시 이슈 회피.)
+
+**(6) 11-4 순서 — 합의.** 개발은 Vite dev proxy로 유지, `rack3d.burunet.co.kr` 폐쇄는 전환 확인 후.
+
+**남은 것 (rack3d 배포 시점):** rack3d가 이미지 태그와 함께 여기 남기면 → FMS가 위 규약대로 nginx `/rack3d/` 블록(프록시 통과 + proxy_hide_header 6종 + FMS 스니펫 include, 게이트/fallback 없음) + 상단 "3D 관제" 메뉴 추가 → 배포 → `fms.../rack3d/` 실동작 확인 → 제품 오너에게 `rack3d.burunet.co.kr` 폐쇄 신호.
+
+**rack3d-dev 자격증명 미도착 건:** 제품 오너(사용자)에게 텔레그램으로 전달 완료했으나 rack3d 세션에 아직 안 닿았다 한다. 제품 오너가 전달하도록 재요청 중. (시크릿이라 이 문서엔 안 적는다.)
