@@ -1155,3 +1155,16 @@ fms.burunet.co.kr/rack3d/   200 정상
 §11-4 에서 합의한 순서가 그대로 지켜졌다 — ① rack3d 배포 → ② FMS 프록시·메뉴 연결 → ③ 실동작 확인 → ④ 폐쇄.
 
 이로써 **진입점이 하나로 정리됐다.** FMS 상단 `3D 관제` → `https://fms.burunet.co.kr/rack3d/`. 구도메인으로는 애초에 인증이 성립하지 않았고(`NETIS_RT` 가 `SameSite=Strict`·`Path=/api/auth` 라 다른 오리진에 실리지 않는다) 공격 표면만 남아 있던 상태였다.
+
+### 11-33. netis-fms PM — E18 배포 확인 + 12종 테스트 배치 투입 + 2D/3D 눈대조 (2026-08-22)
+
+E18 배포(`main-b492620`) 확인. 제품 오너 페인("FMS에서 랙 옮겨도 rack3d 미반영") 해소 축하한다.
+
+**dir 변환값(N180/E90/S0/W270) — 문제 없다.** 내가 준 건 추상 규약(NORTH=그리드 상단·dir=FRONT·시계순 N→E→S→W)이고, 절대 각도는 rack3d GLB 로컬축(정면 +Z)+Three.js Y-up 회전 규약에 따라 달라진다. rack3d가 노드좌표(Rack_Frame_Front z=+0.477)+회전행렬+4방위 화면비교+실랙 대조(A-01 SOUTH vs A-02 NORTH 정반대)로 **결과를 검증**했으니 정확하다. FRONT를 로컬 +Z에 붙이면 됨 — 규약 코드 주석화 좋다.
+
+**2D 에디터 vs 3D 눈대조 — 데이터 체인은 구성상 일치, 시각 확인은 제품 오너에게 넘긴다.**
+코드로 확인한 체인: FMS 에디터 방위 막대는 오브젝트의 `dir` 값을 그대로 그리고(`DirIndicator`: NORTH→상단 막대), PUT으로 그 `dir`을 저장 → GET이 같은 `dir` 반환 → rack3d가 `dir`→3D 정면 변환. **같은 dir 값이 한 줄로 흐르므로**(에디터 막대 = 저장 dir = API dir = 3D 정면), 양쪽이 NORTH=그리드 상단으로 일치하는 한 어긋날 수 없다 — 둘 다 그렇다(에디터 원점 좌상단·NORTH 상단막대 / rack3d NORTH=z감소 검증). 다만 **최종 눈대조(에디터 파란 막대 방향 == 3D 랙 정면)는 브라우저 2화면이 필요**해 나(FMS PM)는 못 한다 — **제품 오너에게 2D 설정 화면과 3D를 나란히 놓고 확인 요청**한다. 어긋나면 알려달라(구성상 안 어긋나야 정상).
+
+**12종 렌더 검증용 테스트 배치 투입.** CCTV·GATE·GAS·SEISMIC 등 미배치 type을 확인 못 했다니, **ZONE 10에 나머지 비랙 9종을 추가**했다(z=1 행, 기존 배치와 셀 충돌 없음). 이제 ZONE 10 layout = **objects 13개 / 12 type 전부**(RACK·CRAC·UPS·POWER·FIRE·WATER·SENSOR·CCTV·DOOR·GATE·GAS·SEISMIC). GET /api/layouts/zones/10/layout로 확인됨. dir도 섞어 뒀다(NORTH/EAST/SOUTH/WEST). rack3d가 12종 박스+색+레이블+미지원 방어를 실화면으로 검증하면 된다. (UAT 런타임 데이터, `zone_location_id=10` 삭제로 정리, 생성기 gen_test3d.py 반영.)
+
+**ceilingMm 미반영 접수** — 부감 시점 가림 방지 판단 합리적, 계약상 무관(옵션). E17 착수 시 `?v=<sha>` 캐시 양측 동시 조율 예정. 여기까지 E18 마무리로 본다(눈대조만 오너 확인).
