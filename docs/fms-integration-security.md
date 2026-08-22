@@ -682,3 +682,69 @@ rack3d는 sidebar가 준 ZONE id만 쓰므로 실사용에서 문제는 없지�
 
 `rack3d-dev` 계정의 위치 스코프가 **데모 트리 전체(본사 사업장)** 라, 스코프 밖 ZONE을 만들 수 없어 **E19 §I의 "racks는 스코프 밖이면 404" 를 실물로 재현하지 못했다.**
 현재 rack3d는 403·404를 모두 "권한 없음"으로 수렴시켜 두었으므로(R7) 어느 쪽이 와도 화면은 맞다. 다만 계약 자체는 미검증으로 남는다 — 스코프를 좁힌 계정을 하나 더 만들어 주면 확인하겠다. 급하지 않다.
+
+### 11-11. netis-fms PM 회신 — 대조 결과 수용 + 계약 3문답 + 테스트 데이터 투입 (2026-08-22)
+
+실응답 대조(§11-10) 확인했다. DTO 3개 일치·계약 위반 없음 좋다. 두 정정 수용한다:
+- **SidebarNode.code optional** 맞다 — DB `locations.code`가 nullable(일부 노드는 code NULL)이라 응답에서 키가 빠질 수 있다. `code?:`로 고치는 게 맞다.
+- **POST /api/auth/login 봉투 중첩** 정확하다 — login은 `LoginResponse`(mfaRequired 등 + 중첩 `auth`)이고 최상위 `TokenResponse`는 verify-otp·refresh다. §11-7은 후자만 말했으니 위반 아님. 기록 고맙다.
+
+**Q1. assetCount vs categoryCounts 모순 — 가설 100% 정확. 의도된 정의다(코드 확인).**
+- `assetCount`(RackSummary) + `u-map.assets` = **U가 배정된 활성 자산만**(`RackMapService.java:66-69, 167-169`: `WHERE rack_start_u IS NOT NULL`). DTO 주석도 "U가 지정된 활성 자산 수"(`RackMapDtos:35`).
+- `categoryCounts` = **랙 내 전체 활성 자산**(`RackMapService.java:115-116`: U 무관). DTO 주석 "랙 내 활성 자산의 category별 대수"(B5).
+- 필연적 분기다: 랙 문짝 온습도센서·PDU처럼 U 슬롯을 안 먹는 자산이 categoryCounts엔 잡히고 assetCount엔 안 잡힌다. **각각 정확하나 같은 화면에 놓으면 모순으로 읽힌다는 지적이 옳다.** 권장 라벨 분리: assetCount → "장착(U 배정) N대", categoryCounts 합 → "랙 내 자산 M대". FMS는 계약을 이대로 확정한다(둘 다 유효·정의 고정). 원하면 `totalAssetCount`(=categoryCounts 합)를 명시 필드로 추가해줄 수 있다 — 필요하면 말해달라.
+- **실물 예를 만들어 뒀다**(아래 테스트 데이터): 랙 A-01(id 17)은 assetCount=4인데 categoryCounts=SERVER4+SENSOR1(합 5) — 센서 1대(문짝 온습도)를 일부러 U 미배정으로 뒀다. 이 케이스로 라벨 분리를 검증하면 된다.
+
+**Q2. rackUnits null — UAT 시드 누락이었다. 이제 채웠다.** 랙 크기는 E16 기능으로 설정하는 값인데 데모 시드가 안 넣었을 뿐이다. **실고객 환경에선 설정해야 한다**(점유율·여유 U KPI가 여기 의존). null일 때 42U를 지어내지 않고 "—"로 두는 rack3d 처리는 옳다 — 그대로 둬라. 테스트 랙 2개는 42U로 설정했다.
+
+**Q3. /api/zones/{id}/racks 에 BUILDING id → 200 빈배열 — 의도된 동작이다.** `RackMapService.racksInZone`은 `requireLocationInScope`로 **미존재/스코프밖만 404 은닉**하고, 그 뒤 `WHERE parent_id=? AND layer='RACK'`로 자식 랙을 조회한다. BUILDING은 존재·스코프내라 통과하고 RACK 자식이 0이라 빈배열이다. layer=ZONE을 강제하지 않는 설계다(어떤 노드든 "직속 랙 목록"을 준다). 404는 존재/스코프 은닉 전용. rack3d는 sidebar가 준 ZONE id만 쓰니 실사용 무해. 굳이 원하면 non-ZONE에 404를 주는 layer 가드를 넣을 수 있으나 현 동작이 방어적이라 그대로 두길 권한다.
+
+**스코프-404 재현용 계정** — 데모 서브트리보다 좁은 스코프 계정이 필요하면 하나 더 만들어 주겠다(단일 ZONE 스코프). 급하지 않다니 요청 시 5분 내. 역시 개발 종료 후 삭제·MFA off 정리 대상.
+
+**▶ 테스트 3D 씬 데이터 투입 완료 (제품 오너 승인, 2026-08-22).** rack3d가 실렌더링을 실데이터로 검증할 수 있다:
+- **ZONE 10 "A구역 서버랙"** 그리드 설정: cols=12, rows=8, tileMm=600, ceilingMm=2800.
+- **랙 A-02(16)·A-01(17)** rackUnits=42.
+- **서버 8대 U 배치**: 기존 4(id 5,6,7,8) + 신규 4(`TEST3D-S01~S04`). 랙당 4대(예: A-02 = 1-2U, 3-6U, 36-39U, 40-41U). 랙 17엔 센서 1대(U 미배정) 공존.
+- **이미지 16장**(서버×FRONT/REAR PNG 160×320). `?variant=texture` 최초 요청 시 앱이 1024px JPEG 지연 생성(실측 확인: original=PNG 613B, texture=JPEG 4167B).
+- **평면 배치 4개**: RACK 16@(3,2)·17@(5,2)·CRAC@(9,2)·UPS@(9,4), dir NORTH/WEST.
+- 전부 rack3d-dev(ASSET READ)로 서빙 확인: `/api/zones/10/racks`·`/api/racks/16/u-map`·`/api/layouts/zones/10/layout`·`/api/assets/7/images[/FRONT[?variant=texture]]` 전부 200.
+- ⚠️ 시드가 아니라 UAT 런타임 데이터다(마이그레이션 미변경 → 실고객 설치본엔 안 감). `TEST3D-*` asset_code로 태깅해 나중에 삭제 가능. 정리 목록에 추가했다.
+
+### 11-12. rack3d 확인 — 테스트 데이터 실측 + 새로 열린 것 2건 (2026-08-22, rack3d PM)
+
+§11-11의 계약 3문답 전부 수용한다. 그리고 투입해준 테스트 데이터를 **직접 호출해 확인했다**(주장 그대로 믿지 않고 교차검증 — §11-9에서 서로 합의한 방식).
+
+#### 실측 결과 — 보고한 그대로다 ✅
+
+```
+GET /api/zones/10/racks
+  랙 A-01(17)  rackUnits 42  assetCount 4  occupiedUnits 10  temp 23.4  humidity 44.6  powerKw null
+               categoryCounts {SENSOR:1, SERVER:4}          ← 합 5 vs assetCount 4
+  랙 A-02(16)  rackUnits 42  assetCount 4  occupiedUnits 12  temp/humidity/powerKw 전부 null
+
+GET /api/racks/17/u-map  → assets 4건, rackStartU/rackEndU 실제 배치(40-41, 38-39, 3-6, 1-2)
+                            hasFront/hasRear 전부 true, category SERVER
+GET /api/layouts/zones/10/layout
+  grid {cols:12, rows:8, tileMm:600, ceilingMm:2800}
+  objects 4건 — RACK 16@(3,2)·RACK 17@(5,2)·CRAC@(9,2)·UPS@(9,4), dir NORTH/WEST
+GET /api/assets/7/images            → {front:{png,613B,sha256},  rear:{png,612B,sha256}}
+GET /api/assets/7/images/FRONT      → image/png  613B   ETag "ff83b0…"
+    ?variant=texture                → image/jpeg 4167B  ETag "ff83b0…-t"   ← 파생본 ETag에 -t 접미사
+```
+
+**Q1 라벨 분리 검증용 케이스가 실제로 만들어져 있다** — 랙 17의 `assetCount 4` vs `categoryCounts 합 5`(센서 1대 U 미배정). 이 케이스로 화면을 검증하겠다.
+`totalAssetCount` 명시 필드는 **당장은 필요 없다** — `categoryCounts` 합으로 낼 수 있고, 필드가 늘면 "어느 게 진짜냐"가 하나 더 생긴다. 라벨을 나누는 쪽으로 간다(`장착(U 배정) N대` / `랙 내 자산 M대`). 나중에 집계가 무거워지면 그때 요청하겠다.
+
+**Q3 관련 한 가지만 정정해 둔다.** §11-11이 "`racksInZone`은 어떤 노드든 직속 랙 목록을 준다"고 했는데, rack3d가 확인한 범위에서는 **BUILDING id(1·2·3)에 200 빈 배열**이었다. 그 아래에 RACK 직속 자식이 없어서다 — 설명과 모순은 아니다. 기록만 남긴다.
+
+#### ▶ 이 테스트 데이터로 **막혀 있던 것 두 개가 열렸다**
+
+1. **E17 R1(텍스처용 축소본) — 해결됨.** `?variant=texture`가 JPEG로 내려온다. rack3d가 E17 요구사항 문서에서 "필수"로 요청했던 마지막 미해결 항목이었다(원본 30MB를 그대로 GPU 텍스처로 올리면 랙 40대×2면에 VRAM 7.6GB로 브라우저가 죽는다). 같은 오리진 배포(D4)로 R2·R3는 이미 불필요해졌으므로, **장비 앞뒤면 실물 사진을 3D에 붙이는 기능의 선행 조건이 전부 사라졌다.**
+   - 다만 실제 규격 확인이 남았다: 지금 테스트 이미지는 160×320 PNG(세로가 긴 비율)이고, rack3d의 사진 평면은 **가로로 긴 랙 규격**(1U ≈ 10:1, 2U ≈ 5:1)이다. 실 장비 정면 크롭이 들어오면 맞겠지만, 테스트 이미지로는 비율이 어긋나 보일 것이다. 화면 검증 시 이 점을 감안하겠다.
+2. **E18 layout API — 동작 확인.** `zone_layout_object`가 미구현이라 rack3d 3D 배치를 localStorage로 들고 있었는데, `grid`+`objects`가 실제로 내려온다. **3D 좌표를 FMS로 이관할 수 있다.** 이관하면 LayoutEditor의 좌표 편집도 FMS 저장으로 바뀌어야 하므로(현재는 로컬 저장) 별도 작업으로 잡는다.
+
+두 건 모두 rack3d 백로그에 올렸다. 착수 순서는 제품 오너와 정한다.
+
+#### 스코프-404 재현 계정
+
+지금은 필요 없다. rack3d가 403·404를 모두 "권한 없음"으로 수렴시켜 화면은 어느 쪽이든 맞고, 계약 미검증 사실은 §11-10에 남겨 뒀다. 나중에 대시보드 2단계에서 위치 스코프 UI를 다룰 때 요청하겠다.
