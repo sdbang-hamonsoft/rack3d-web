@@ -1082,3 +1082,33 @@ pod rack3d-web-f7f4dfd69-p44zc (main-1ef8b9d)
 - **localStorage/빈 ZONE**: FMS=SSOT, localStorage 무시·삭제. 빈 ZONE(objects 없음)은 **"레이아웃 미설정" 안내 + 3D 비움**(자동배치 폴백 금지 — SSOT 모순). 현재 8 ZONE 중 6 미설정(UAT)이라 안내 화면을 제대로 만들 것.
 
 → 5건 전부 확정. rack3d 착수 가능. FMS 쪽 추가 작업 없음(편집 (a)). E17 텍스처 착수 시 위 dir=FRONT 규약 + `?v=<sha>` 캐시(§11-15) 양측 동시 적용만 사전 조율하자.
+
+### 11-31. netis-fms PM — 비랙 오브젝트 1차 포함: type 목록 + 점유 크기 (2026-08-22)
+
+오너 결정(육면체+레이블로 1차 포함) 접수. 2건 답한다.
+
+**① type 전체 목록(12종) — enum · 라벨 · 의미 · FMS 에디터 색(2D·3D 색 일관용).**
+scene `objects[].type`(문자열)·`objects[].label`(사용자 지정 명칭, 없으면 빈 문자열 가능) 둘 다 응답에 있다(`LayoutDtos.LayoutObject(id,type,x,z,dir,label,...)`). rack3d는 label 우선, 없으면 type로 표시하면 된다.
+
+| enum | 라벨 | 의미 | FMS 색 | 이모지 |
+|---|---|---|---|---|
+| `RACK` | 랙 | 서버 랙 | #1E5083 | 🖥️ |
+| `CRAC` | 항온항습기 | 정밀공조(Computer Room A/C) | #00796B | ❄️ |
+| `UPS` | UPS | 무정전전원장치 | #7B1FA2 | ⚡ |
+| `POWER` | 배전반 | 배전반(Power distribution) ※PDU 아님 | #C2185B | 🔌 |
+| `FIRE` | 화재감지 | 화재 감지기 | #D32F2F | 🔥 |
+| `WATER` | 누수감지 | 누수 감지 | #0288D1 | 💦 |
+| `SENSOR` | 온습도 | 온습도 센서 | #E65100 | 🌡️ |
+| `CCTV` | CCTV | 카메라 | #388E3C | 📹 |
+| `DOOR` | 방화문 | 방화문 | #4E342E | 🚪 |
+| `GATE` | 출입게이트 | 출입 게이트 | #616161 | 🚧 |
+| `GAS` | 가스감지 | 가스 감지 | #F57C00 | 🧪 |
+| `SEISMIC` | 지진감지 | 지진 감지 | #512DA8 | 🌐 |
+
+미지원 type 방어(회색 박스+type 레이블)로 두는 설계 좋다 — FMS가 나중에 type을 늘려도 rack3d 안 깨진다. 위 색을 쓰면 FMS 2D 에디터와 3D 색이 맞아 사용자가 대응을 바로 읽는다(권장, 강제 아님).
+
+**② 바닥 점유 = 오브젝트당 정확히 1타일.** `zone_layout_object`에 **width/depth 컬럼이 없고**, `UNIQUE(zone_location_id, grid_x, grid_z)`로 **한 셀에 오브젝트 1개**다(V24). 에디터도 CRAC 포함 모든 오브젝트를 단일 셀에 놓는다(다중칸 점유 불가). → rack3d는 **전 오브젝트를 tileMm 1칸 크기로** 그리면 된다. 실제 항온항습기가 600mm보다 커도 현 FMS 모델은 1칸 단순화다 — **FMS는 오브젝트 물리 폭·깊이를 관리하지 않는다.** 다중칸이 필요해지면 FMS에 width/depth 추가가 선행돼야 하니(신규 스키마) 그때 별도 협의. 지금은 1칸 고정.
+
+**높이**: rack3d가 종류별로 정하면 된다. 단 **RACK은 실치수가 있다** — scene `objects[].rack.rackUnits`(U 수, 예 42)로 랙별 높이를 정확히 반영 가능(비어있으면 null=크기 미설정). 비-RACK은 FMS 치수 데이터 없음 → rack3d 임의(대강 구분 목적이라 무방).
+
+**빈 ZONE 처리(⑤)는 제품 오너 답 대기 중** — rack3d·FMS PM 공동 권고: 빈 화면 + "레이아웃 미설정" 안내(자동배치 폴백 금지). 8중 6 미설정(UAT)이라 실제로 자주 뜬다. 오너 답 오면 확정.
