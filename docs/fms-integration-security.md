@@ -1043,3 +1043,42 @@ pod rack3d-web-f7f4dfd69-p44zc (main-1ef8b9d)
 **양쪽 서버 모두 404 를 서빙한 흔적이 없다** — FMS 프론트 nginx 0건(§11-27), rack3d nginx 0건. 2·3회차 미재현까지 더하면 **브라우저 측 일시 아티팩트**(favicon·prefetch·devtools 등)로 보는 것이 타당하다.
 
 **종결한다.** 서버 어느 쪽의 이슈도 아니고, 재현 경로가 없어 더 파는 것이 의미가 없다. 다시 관측되면 그때 양쪽 로그를 같은 시각으로 대조하면 된다 — 이번에 그 절차가 실제로 작동한다는 것은 확인됐다.
+
+### 11-29. netis-fms PM — E18 좌표 이관 협의 답 (FMS 사실 + 권고, 편집주체는 오너 확인 중) (2026-08-22)
+
+5개 협의 답한다. ①②③⑤는 확정 가능, ④(편집 주체)만 제품 오너 결정 — 지금 묻는 중이다.
+
+**① 그리드**: FMS가 ZONE별 `cols/rows/tileMm/ceilingMm`을 준다 → rack3d 상수(18x14) 버리고 그대로 받아라. **tileMm는 현재 전부 600이지만 ZONE별 설정 가능**하니 하드코딩 말고 응답값을 써라(CHECK 1~수천mm 허용). ZONE마다 그리드가 다른 건 정상이다(실측: id10=12x8/tile600/ceil2800, id19=18x14/tile600/ceil3200) — 바닥·카메라 초기위치가 ZONE별로 달라지는 게 맞다. **ceilingMm는 가변(2800·3200)이라 의미 있는 데이터다** — 3D 천장 반영은 rack3d 렌더링 판단에 맡긴다(1차 미반영해도 무방, 나중에 additive). 안 쓰면 무시해도 계약 안 깨진다.
+
+**② 방위(dir)**: FMS 규약 = **NORTH=↑(위/북)**, 회전순 **NORTH→EAST→SOUTH→WEST 시계방향**(`LayoutEditorModal.tsx`: DirIndicator가 NORTH일 때 오브젝트 상단 모서리에 정면 표시, 회전 +1%4). → **rack3d 제안(NORTH=0°, EAST90/SOUTH180/WEST270 시계) 정확히 일치.** 그대로 가라. (dir = 오브젝트 "정면"이 향하는 방위.)
+
+**③ 비-RACK 오브젝트**: 팔레트 **12종** = `RACK, CRAC, UPS, POWER, FIRE, WATER, SENSOR, CCTV, DOOR, GATE, GAS, SEISMIC`(V24 CHECK). **1차 RACK만, 나머지 다음 단계** 제안에 동의한다 — 제품 오너 실제 페인이 "랙 배치 반영"이라 RACK-only가 그걸 정확히 푼다. 비-RACK은 형상(모델)이 필요하니 목록 정해지면 형상 스펙 정리하자. scene API의 objects는 이미 type을 주니 rack3d가 미지원 type은 스킵하면 된다.
+
+**⑤ localStorage/빈 ZONE**: FMS=SSOT, localStorage 무시·삭제 동의(D1 일관). **빈 ZONE(objects 없음)**: 자동배치로 채우면 FMS SSOT와 모순되니 **"레이아웃 미설정 — FMS 환경설정>레이아웃 설정에서 지정" 안내 + 3D 비움**을 권한다(정직·D1). 참고: **현재 8 ZONE 중 6개(75%)가 미설정**이다(UAT). 실고객은 쓰는 ZONE을 설정하겠지만 "미설정 흔함"을 전제로 안내 화면을 제대로 만들어 두는 게 맞다. (자동배치 폴백을 원하면 제품 오너가 정할 사안 — 아래 ④와 함께 확인 중.)
+
+**④ 편집 주체 (a/b) — 제품 오너 결정 중.** rack3d 권고 (a)[rack3d 에디터 읽기전용, 편집은 FMS 레이아웃 설정만]에 **FMS PM도 동의**한다: 편집 지점 단일화, 랙 추가·삭제가 이미 FMS SSOT, (b)는 SETTINGS WRITE라 rack3d-dev(읽기4)로 403 + 권한없음 UI 분기 필요. **결정적으로 (a)면 FMS 코드 변경 0**(레이아웃 에디터·GET·PUT 이미 배포됨) — rack3d가 GET만 소비하면 끝. 그래도 "제품 오너가 rack3d에서도 좌표를 편집하고 싶은가"는 제품 방향이라 오너에게 확인한다. 정해지면 알린다.
+
+→ ④ 답 오면 착수. rack3d는 그동안 ①②③⑤ 기준으로 GET 소비 구현을 진행해도 된다(④가 (a)면 그게 전부, (b)면 PUT 분기 추가). 급하면 1차 "좌표만 읽어 반영" 먼저도 좋다.
+
+### 11-30. netis-fms PM — dir 정밀 규약 확정 + 편집(a) 접수 (2026-08-22)
+
+편집 주체 (a)[FMS만 편집, rack3d 읽기전용] 오너 확정 접수 — **FMS 변경 0**(레이아웃 에디터·GET·PUT 이미 배포됨). rack3d는 GET 소비 + 에디터 읽기전용화만 하면 된다.
+
+**dir 정밀 규약 — 코드로 확정(E17 텍스처 앞뒤가 여기 달림):**
+
+1. **값 목록**: 정확히 **4방위** `NORTH / EAST / SOUTH / WEST`. 45°·임의각 **없음**(`V24` CHECK `dir IN (...)`, `api/layout.ts Direction`). rack3d는 4값→도 변환만 하면 된다.
+
+2. **어느 면 = 정면(FRONT)**: FMS 스키마가 명시한다 — `V24` COMMENT: *"dir … NORTH/EAST/SOUTH/WEST(**정면 방위**). rack3d가 3D 회전으로 변환."* **= 오너 결정(dir=랙 앞면이 향하는 방위)과 일치.** 구현 확인: zone_layout_object는 dir만 저장(front/back 별도 필드 없음), FMS는 이 값을 **변환·반전 없이 그대로 저장·서빙**한다. 레이아웃 에디터의 방향 표시(`LayoutEditorModal.DirIndicator`)는 이 dir 방위 쪽 모서리에 정면 표시 막대를 그린다 — 즉 **화면의 파란 막대 = 랙 정면(front)**. FMS 어디에도 이를 뒷면 기준으로 뒤집는 코드는 없다. → **rack3d: FRONT 텍스처를 dir가 가리키는 면에, REAR를 반대 면에 붙여라.** (E17 때 이 규약대로 하면 앞뒤 안 뒤집힌다.)
+
+3. **그리드 좌표계와 dir 관계**(`DirIndicator` 위치로 확정):
+   - `grid_x` = 열(0-base), 화면 **왼→오른쪽 증가 = EAST 방향**. `grid_z` = 행(0-base), 화면 **위→아래 증가 = SOUTH 방향**. (원점 (0,0) = 그리드 좌상단.)
+   - 따라서: **NORTH = z 감소(그리드 상단, z→0)** · **SOUTH = z 증가(하단)** · **EAST = x 증가(우)** · **WEST = x 감소(좌)**.
+   - 회전순 NORTH→EAST→SOUTH→WEST = 화면상 위→오→아래→왼 = **시계방향**. → rack3d 제안 **NORTH=0°, EAST=90°, SOUTH=180°, WEST=270°(시계)** 그대로 정확하다.
+   - 검증 팁: FMS 레이아웃 설정에서 dir=NORTH인 랙은 정면 막대가 **위쪽**에 뜬다. 3D에서 그 랙의 FRONT가 z 감소 방향(그리드 상단)을 향하면 맞다.
+
+**나머지 3건 재확정(§11-29과 동일, 한자리 정리):**
+- **그리드 규격**: 응답의 cols/rows/tileMm/ceilingMm 그대로 수용. tileMm 현재 전부 600이나 **ZONE별 설정 가능—하드코딩 금지**. ceilingMm 가변(2800/3200), 천장 3D 반영은 rack3d 렌더 판단(1차 생략 무방).
+- **비-RACK 오브젝트**: 팔레트 12종(RACK/CRAC/UPS/POWER/FIRE/WATER/SENSOR/CCTV/DOOR/GATE/GAS/SEISMIC). **1차 RACK만**, 나머지는 형상 스펙 정한 뒤. scene objects의 미지원 type은 스킵.
+- **localStorage/빈 ZONE**: FMS=SSOT, localStorage 무시·삭제. 빈 ZONE(objects 없음)은 **"레이아웃 미설정" 안내 + 3D 비움**(자동배치 폴백 금지 — SSOT 모순). 현재 8 ZONE 중 6 미설정(UAT)이라 안내 화면을 제대로 만들 것.
+
+→ 5건 전부 확정. rack3d 착수 가능. FMS 쪽 추가 작업 없음(편집 (a)). E17 텍스처 착수 시 위 dir=FRONT 규약 + `?v=<sha>` 캐시(§11-15) 양측 동시 적용만 사전 조율하자.
