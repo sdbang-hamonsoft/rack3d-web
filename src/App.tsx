@@ -456,11 +456,27 @@ function LayoutObjectMesh({ object, tileSize }: { object: SceneObject; tileSize:
         <meshBasicMaterial color="#e8f6ff" toneMapped={false} />
       </mesh>
       {/*
-        레이블 높이에 하한(0.62m)을 둔다 — 감지기·센서류는 박스가 0.2~0.35m로 낮아서
-        박스 바로 위에 두면 `occlude` 판정이 바닥·자기 박스에 걸려 레이블이 통째로 사라진다
-        (실측: SENSOR 레이블이 `display:none`으로 숨겨졌다).
+        ⚠️ 이 레이블에는 `occlude`를 걸지 않는다 — **가려서 숨기는 것보다 안 보이는 쪽이 더 나쁘다.**
+
+        3D 모델이 없는 이 오브젝트들은 "색 박스 + 이름표"가 정보 전부라, 레이블이 숨으면
+        기능의 절반이 죽는다. drei의 `occlude`는 씬 전체를 레이캐스트해 시선이 막히면
+        `display:none`을 걸어버리는데, 이 오브젝트들은 박스가 0.2~0.35m로 낮아서
+        **옆 칸의 랙(히트박스 0.72×2.12×1.1)·방화문(2.1m)·항온항습기(2.0m)가 그대로 시선을 막는다.**
+        레이블 높이에 하한(0.62m)을 둬 봤지만 부족했다 — 실측(ZONE 10, 진입 기본 카메라
+        (3.30, 4.05, 7.05))에서 화재감지·누수감지·온습도·CCTV·가스감지·지진감지 6종이
+        **사용자가 ZONE에 처음 들어갔을 때 보는 바로 그 화면에서** 통째로 사라졌다.
+
+        벽·천장이 없고 부감이 기본인 씬이라 "뒤에 가려진 것이 비쳐 보이는" 손해는 작다.
+        비용도 늘지 않는다 — DOM 수는 그대로고(`occlude`는 숨길 때도 포털·프레임 계산을
+        그대로 하고 `display`만 껐다), 오히려 레이블 1개당 매 프레임 씬 전체 교차 검사가
+        사라진다(랙 36대 ZONE 실측 0.2ms/레이블).
+
+        높이 하한(0.62m)과 `zIndexRange={[1, 0]}`은 유지한다. 하한은 이제 가림 회피용이 아니라
+        낮은 박스 위에서 이름표가 박스·모서리 선과 겹쳐 읽히지 않게 띄우는 값이고,
+        z 범위는 랙 레이블·경보 뱃지가 위에 오도록 한다(drei는 `occlude`가 있을 때도
+        이 값에서 [1, 0]을 썼으므로 겹침 순서는 바뀌지 않는다).
       */}
-      <Html position={[0, baseY + Math.max(heightM + 0.14, 0.62), 0]} center distanceFactor={8} zIndexRange={[1, 0]} occlude>
+      <Html position={[0, baseY + Math.max(heightM + 0.14, 0.62), 0]} center distanceFactor={8} zIndexRange={[1, 0]}>
         <div className="layout-object-label" style={{ borderColor: object.color }}>
           <i style={{ background: object.color }} />
           {object.label}
