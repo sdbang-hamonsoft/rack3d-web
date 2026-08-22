@@ -900,3 +900,77 @@ GET http://10.1.20.21:30303/rack3d/models/rack-42u.glb → 200
 **붙일 때 지켜야 할 것**(§11-6 에서 합의한 그대로) — 게이트 없이 프록시 통과만 · SPA fallback 은 rack3d 컨테이너에 맡기고 FMS 는 걸지 않음 · `Cache-Control` 덮어쓰지 않음 · 보안 헤더 6종은 `proxy_hide_header` 후 FMS 스니펫 include · XFF 치환 규약 준수.
 
 붙인 뒤 `https://fms.burunet.co.kr/rack3d/` 로 실동작 확인해 주면, 그다음이 `rack3d.burunet.co.kr` 폐쇄 신호다(§11-4 순서).
+
+### 11-23. netis-fms PM — /rack3d/ 프록시 + "3D 관제" 메뉴 배포 완료 (2026-08-22)
+
+FMS 쪽 연결 배포·검증 완료(프론트 이미지 `main-368abcf`, 무중단·재시작 0). 파이프라인: 구현→리뷰(🔴0)→🟡2(크로스ns 기동결합) 수정→빌드+`nginx -t` 검증→배포.
+
+**curl 실측(fms.burunet.co.kr):**
+- `/rack3d/` → 200 text/html, `Cache-Control: no-cache`(rack3d 것 보존, 안 덮음 ✓), CSP=FMS 스니펫 적용, `X-Frame-Options: DENY` **1회**(중복 없음 — proxy_hide_header+include 동작 ✓).
+- `/rack3d` → 301 `/rack3d/`(상대경로 ✓).
+- `/rack3d/models/rack-42u.glb` → 200 application/octet-stream 220,460B(프록시 통과 ✓).
+- 상단 네비에 "3D 관제"(ASSET READ 게이트, `<a href=/rack3d/>`).
+
+**🟡2 해소**: `resolver 10.233.0.3 valid=30s` + 변수 proxy_pass(`$rack3d_upstream$request_uri`)로 런타임 해석 — rack3d Service 부재 시 `/rack3d/`만 502, FMS 프론트는 생존(기동 실패 안 함).
+
+**▶ rack3d 확인 부탁(브라우저 필요 — curl로 못 봄):**
+1. **SSO**: FMS에 로그인한 브라우저로 `https://fms.burunet.co.kr/rack3d/` 진입 → rack3d가 부팅 시 `POST /api/auth/refresh`(이제 같은 오리진이라 NETIS_RT 동반)로 accessToken 받아 **별도 로그인 없이** 데이터 로드되는지.
+2. **🟡1 CSP/3D 렌더**: FMS CSP(`script-src 'self'`, wasm-unsafe-eval 없음) 하에서 three.js **3D 씬이 정상 렌더**되는지(meshopt WASM 안 쓰는 것 확인 — CompileError 없어야). rack3d가 동일 CSP로 QA했다니 될 것이나 프록시 경유 실화면 확인 필요. 콘솔 CSP 위반 로그 없는지도.
+3. 미인증 진입 시 rack3d 자체 "세션 만료" 안내 정상 동작(게이트 없으니).
+
+이 3개 확인되면 알려달라 → 제품 오너에게 **`rack3d.burunet.co.kr`(Cloudflare) 폐쇄 신호**를 준다(§11-4 순서). 어긋나는 게 있으면 바로 알려달라 — FMS 쪽 고칠 게 있으면 대응한다.
+
+**후속(🟡, 비차단)**: 🟡3 rack3d 프록시에 WS 업그레이드 헤더 없음(rack3d가 자체 WS 도입 시), 🟡4 프록시 access_log 기본 포맷(rack3d가 쿼리 토큰 쓰면 netis_api 포맷 적용) — 현재 무해, rack3d 해당 기능 도입 시 재검토.
+
+### 11-24. rack3d 브라우저 검증 결과 — ①②③ 전부 PASS (2026-08-22, rack3d PM)
+
+§11-23 이 요청한 3가지를 headless Chrome + CDP 로 확인했다. **토큰 주입이 아니라 실제 로그인 폼을 제출해 브라우저가 `Set-Cookie` 로 받은 진짜 세션**으로 검증했다(SSO 성립 여부가 검증 대상이라 주입으로는 의미가 없다). 운영이라 GET 조회와 로그인만 했다.
+
+#### ① SSO — **PASS**
+```
+POST /api/auth/refresh → 200      (NETIS_RT: domain=fms.burunet.co.kr, path=/api/auth,
+GET  /api/auth/me      → 200       httpOnly, secure, SameSite=Strict — 같은 오리진이라 자동 동반)
+GET  /api/locations/sidebar → 200
+GET  /api/zones/10/u-maps   → 200
+```
+자체 로그인 화면으로 튕기지 않고 URL 유지한 채 바로 로비 렌더. `FACILITIES 08` · ZONE 카드 8개.
+ZONE 10 진입 → 상단바 **`2 RACKS | 9 IN RACKS | 8 MOUNTED | LIVE`**, 3D 라벨 랙 2대, 랙 안 장비 **8대** 전부 렌더.
+**랙 17 라벨 분리가 운영에서도 성립** — `MOUNTED 4 대` / `IN RACK 5 대` + `이 랙은 U 미배정 자산 1대가 있습니다` + `RACK CONTENTS: SERVER 4 · SENSOR 1`.
+같은 화면에서 `TEMP 23.5 °C` / `HUMIDITY 43.7 %` / **`POWER — kW`** — `powerKw: null` 이 0 이 아니라 `—` 로 나온다(C6 유지).
+폴링도 설계대로: 95초 관측에 `racks 4건`(30초 주기) + `u-maps 1건`(진입 시 1회).
+
+**D4 의 근거가 운영에서 실증됐다** — `NETIS_RT` 의 `Path=/api/auth` 때문에 같은 오리진이어야만 refresh 가 성립한다는 §11-5 (4) 의 논거가 그대로 확인됐다.
+
+#### ② FMS CSP 아래 3D 렌더 — **PASS**
+`canvas 1600x823`, GLB **4종 전부 200**(`rack-42u`·`dell-poweredge-r760`·`hpe-proliant-dl360-gen11`·`cisco-ucs-c240-m7`).
+**WASM/디코더 CSP 위반 0건 · 콘솔 예외 0건 · `unhandledrejection` 0건 · gstatic/wasm/draco/meshopt 요청 0건.**
+
+`useGLTF(url, false, false)` 로 디코더를 끈 해결책이 **FMS 실제 CSP(`script-src 'self'`, `wasm-unsafe-eval` 없음) 아래에서 성립함을 운영에서 확인**했다. 우리 QA 가 대조군으로 재현했던 `CompileError: WebAssembly.instantiate() ... 'unsafe-eval' is not an allowed source` 가 **한 번도 발생하지 않았다.** 이전까지는 rack3d 컨테이너 단독 CSP 로만 검증했던 항목이다.
+
+> **⚠️ 단 CSP 위반이 정확히 0 은 아니다 — 1건 있고, rack3d 무관이다.**
+> `script-src-elem` ← `https://static.cloudflareinsights.com/beacon.min.js/...` (Cloudflare Web Analytics 가 HTML 에 자동 주입).
+> rack3d 번들·`index.html` 어디에도 없고, **FMS 본체(`/` → `/login`)에서도 정확히 같은 위반 1건**이 난다(대조 확인). 기능 영향 0 이며, 오히려 FMS CSP 가 외부 스크립트를 실제로 차단하고 있다는 증거다. 없애려면 Cloudflare 대시보드에서 Web Analytics 를 끄거나 CSP 에 해당 호스트를 추가해야 하는데 **FMS 측 판단 사항**이다.
+
+#### ③ 미인증 진입 — **PASS**
+쿠키 없는 브라우저: `SESSION EXPIRED / 세션이 만료되었습니다 / netis-fms에 로그인한 뒤 다시 접속하세요.` + 이동 버튼.
+**리다이렉트 루프 없음** — 45초 추가 관찰에도 URL 불변, 문서 재요청 0건. API 는 `POST /api/auth/refresh` **1건(401)** 으로 끝나고 데이터 API 를 전혀 쏘지 않는다.
+버튼 → `https://fms.burunet.co.kr/login?redirect=%2Frack3d%2F` (FMS 로그인 화면 정상 렌더).
+
+---
+
+#### 🟡 별건 — 세션 만료 후 **로그인 복귀가 FMS SPA 404 로 떨어진다** (폐쇄 판단과 무관)
+
+재현(전부 관측): 미인증 진입 → 안내 화면의 이동 버튼 → `/login?redirect=%2Frack3d%2F` → 로그인 제출(`POST /api/auth/login` 200) → **URL 은 `/rack3d/` 인데 화면은 FMS 의 `페이지를 찾을 수 없음 / 🚧 구현 예정 (404)`**.
+
+원인: 로그인 후 네트워크에 **`GET /rack3d/` 문서 요청이 없다**(관측: `login`·`me`·폰트 1건이 전부). FMS 프론트가 `redirect` 를 react-router 클라이언트 라우팅으로 처리해 서버를 거치지 않으므로 nginx 의 `/rack3d/` 프록시가 타지 않고 FMS SPA 의 404 라우트가 렌더된다. **F5 하면 정상 진입**한다(확인).
+
+**정상 경로는 문제없다** — 상단 `3D 관제` 메뉴는 `<a href="/rack3d/">` 라 전체 페이지 로드가 일어나 정상 진입한다(`GET /rack3d/` 200 + 자산 200 + `refresh/me/sidebar` 200).
+
+**어느 한 쪽만 고치면 된다:**
+- **(권장) FMS**: 로그인 후 `redirect` 값이 SPA 라우트에 없으면 `window.location.assign()` 으로 처리. 앞으로 붙을 다른 하위 앱에도 그대로 이롭다
+- **(대안) rack3d**: `src/api/session.ts` 의 `APPEND_REDIRECT_PARAM` 을 `false` 로 되돌려 `/login` 으로만 보내고 복귀는 상단 메뉴에 맡긴다. 이 상수는 원래 이 목적으로 토글 가능하게 남겨둔 것이다
+
+FMS 가 (권장) 쪽을 택하기 어렵다면 말해달라 — rack3d 쪽 한 줄로 즉시 닫겠다.
+
+#### 검증하지 못한 것
+MFA 걸린 일반 계정의 SSO 흐름(`rack3d 개발` 은 `mfaRequired:false`) · 다른 스코프 계정 · 브라우저 1종(headless Chrome/SwiftShader, 실 GPU·타 브라우저 없음) · 장시간 운영(최장 95초 연속 관측, 토큰 선제 갱신 TTL 900초 실경계 미확인) · 구도메인 `rack3d.burunet.co.kr` 현재 상태 · 쓰기 경로(운영이라 미실시).
