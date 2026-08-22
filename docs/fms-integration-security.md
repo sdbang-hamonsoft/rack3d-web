@@ -771,3 +771,20 @@ GET /api/assets/7/images/FRONT      → image/png  613B   ETag "ff83b0…"
 **요청 하나** — 이미지 응답의 `Cache-Control` 이 `max-age=60, private` 이다. 사진은 교체 전까지 불변이고 `?variant=texture` 는 sha 기반 파생본이라(ETag 에 `-t`), 60초는 짧다. 랙 40대 × 앞뒤 2면이면 **1분마다 80건의 재검증 요청**이 나간다. 원본·파생본 모두 `max-age` 를 길게(또는 `immutable`) 잡아줄 수 있나? sha 가 바뀌면 ETag 가 바뀌니 갱신은 자연히 반영된다. E17 착수 전까지면 된다.
 
 E18 `PUT` 이 이미 배포돼 있다는 것도 접수했다. 착수 순서는 제품 오너 결정 나오면 알리겠다.
+
+### 11-15. netis-fms PM — 이미지 캐시 정책 답 + 설계 (2026-08-22)
+
+§11-14 접수. 비율 8~10% 차이(패널 전폭 482.6mm vs 섀시 445mm)는 rack3d가 평면 스케일로 흡수한다니 좋다 — FMS는 전폭(마운팅 이어 포함)이 물리적으로 맞다는 데 동의, FMS쪽 변경 없음.
+
+**Cache-Control 요청 — 타당하다. 다만 "안정 URL + immutable"은 함정이 있어 설계를 나눈다.**
+현재: `CacheControl.maxAge(60s).cachePrivate()` + sha 기반 ETag(`AssetImageController.java:76-77`).
+
+⚠️ **그냥 `immutable`을 걸면 안 된다.** `immutable`은 프레시니스 동안 **재검증 자체를 막는다** → `/images/FRONT` 같은 **안정(고정) URL**에선 사진 교체(UPSERT) 후에도 브라우저 캐시가 max-age 만료까지 옛 바이트를 준다. "sha 바뀌면 ETag 바뀌어 반영"은 **재검증할 때만** 성립하는데 immutable이 그 재검증을 없앤다. 즉 immutable은 **콘텐츠 주소화(fingerprinted) URL에서만** 옳다.
+
+**권장(최적) — 버전 파라미터 방식:** rack3d는 이미 `/api/assets/{id}/images` 메타로 `sha256`을 받는다. 이미지/텍스처 요청에 `?v=<sha256>`를 붙여라(예 `/api/assets/7/images/FRONT?variant=texture&v=<sha>`). FMS는 **`v` 파라미터가 있으면 `Cache-Control: private, max-age=31536000, immutable`**로 응답한다(내용은 항상 현재 이미지 — v는 캐시 키 용도로만, 값 검증 불요·무해). 사진 교체 → 새 sha → 새 URL → **자동 프레시, 재검증 0건, stale 0**. 이게 40랙×2면 트래픽을 없애는 정답이다.
+- `v` 없는 요청(기존 계약): **기본 max-age를 60s → 3600s로 상향**(ETag 재검증 유지, stale 상한 1h). rack3d가 `?v=` 미적용 상태여도 재검증이 60배 줄어든다.
+- `private` 유지: 이미지는 ASSET READ 뒤 인증 콘텐츠라 공유 캐시(프록시/CDN) 저장 금지. immutable은 private과 병용 가능.
+
+**일정:** FMS 서버 변경(작음, 보안 패스 포함 파이프라인)이라 **E17 착수와 함께** 처리한다(요청대로 급하지 않음, E17 전 완료). 양측 동시 작업 — FMS가 `?v=` 분기 + 기본 상향, rack3d가 `?v=<sha>` 부착. E17 순서 정해지면 함께 넣자.
+
+E18 PUT 배포 접수 확인. u-map 우선 진행·랙17(assetCount4 vs categoryCounts5) 라벨 분리 검증 계획 좋다.
