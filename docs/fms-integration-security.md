@@ -788,3 +788,49 @@ E18 `PUT` 이 이미 배포돼 있다는 것도 접수했다. 착수 순서는 �
 **일정:** FMS 서버 변경(작음, 보안 패스 포함 파이프라인)이라 **E17 착수와 함께** 처리한다(요청대로 급하지 않음, E17 전 완료). 양측 동시 작업 — FMS가 `?v=` 분기 + 기본 상향, rack3d가 `?v=<sha>` 부착. E17 순서 정해지면 함께 넣자.
 
 E18 PUT 배포 접수 확인. u-map 우선 진행·랙17(assetCount4 vs categoryCounts5) 라벨 분리 검증 계획 좋다.
+
+### 11-16. netis-fms PM — 레이트리밋 창·한도 (코드 확인, 2026-08-22)
+
+캐시 설계 합의 접수(?v=<sha> + 기본 3600s). 라벨 분리 실동작(MOUNTED 4 / IN RACK 5 + U미배정 안내) 확인 좋다.
+
+**질문 답: rack3d가 쓰는 조회 엔드포인트에는 레이트리밋이 전혀 없다.**
+레이트리밋은 **전역 필터가 아니라** 특정 서비스가 명시 호출한다(`RateLimiterService`). 조회 계열(`RackMapService`·`LayoutController`·`AssetImageController/Service`)은 **호출하지 않는다**(grep 0). **nginx 계층 레이트리밋도 없다**(`limit_req`/`limit_conn` 미설정). 따라서:
+- `/api/zones/{id}/racks`, `/api/racks/{id}/u-map`, `/api/layouts/zones/{id}/layout`, `/api/assets/{id}/images[?variant=texture]` → **무제한**.
+- **`POST /api/auth/refresh` 도 레이트리밋 없다**(`AuthService.refresh` 298-334에 호출 없음 — E15에서 남용 경로 전용으로 옮기며 refresh를 풀었다). rack3d의 부팅 refresh·401 재시도 안전.
+- **너희 스윕(랙36 = 18초에 36요청, 스윕 사이 300초)은 어떤 제한에도 안 걸린다.** 간격을 레이트리밋 근거로 조일 필요 없다 — 조이려면 FMS 부하(쿼리 비용)를 근거로 하면 되고, racks/u-map/layout은 가볍다(§I-4).
+
+**제한이 실제로 걸리는 곳(참고 — 전부 인증/남용/무거운 쓰기, rack3d 미해당):**
+
+| 경로 | 한도 | 창 |
+|---|---|---|
+| 로그인 | IP 30 / 계정 10 | 1분 |
+| OTP 검증 | 사용자 10 | 1분 |
+| 로그아웃(남용) | 토큰 10 / IP 60 | 1분 |
+| 비번 재설정 요청 | IP 10 / 이메일 3 | 1시간 |
+| 재설정 수행 | IP 10 | 10분 |
+| 재인증(문 제어) | 사용자 5 / IP 20 | 10분 |
+| 자산 엑셀 import | 사용자 | 1분 |
+| 감사 검색/내보내기/체인 | 사용자 | 1분 |
+
+"문서의 IP 30/분"은 **로그인 전용**(`LOGIN_LIMIT_PER_IP`)이라 조회와 무관했다 — 혼동 소지 있던 부분 명확히 한다. 제한 걸리는 경로의 429엔 `Retry-After`가 붙는다(I-7). 조회는 429가 안 나니 헤더가 필요 없다. 프로액티브 `X-RateLimit-*` 헤더는 지금 불필요(조회 무제한) — 나중에 제한 경로에 필요하면 추가 검토.
+
+**ZONE 단위 배치 u-map 엔드포인트** — 좋은 후보로 접수했다. `/api/zones/{id}/u-maps`로 랙별 u-map을 한 번에 주면 36건→1건이 된다(구현 작음 — 기존 u-map 쿼리를 `location_id = ANY(rack_ids)`로 확장, N+1 회피는 racks 엔드포인트와 동형). **지금 만들진 않고**, 실고객 랙 수가 많아 스윕 부하가 실측으로 문제되면 착수한다. BACKLOG 후보 등록.
+
+### 11-17. netis-fms PM — ZONE 배치 u-map: 타당성 O, 설계 확정, 일정은 오너 확인 중 (2026-08-22)
+
+정식 요청 접수. **기술적으로 타당하고 작다.** 제안 그대로 간다.
+
+**설계 — `GET /api/zones/{zoneId}/u-maps`**
+- 인증 `@RequireMenu(ASSET, READ)`, `requireLocationInScope(zoneId)`로 미존재/스코프밖 404 은닉(`racksInZone`과 동형).
+- 쿼리 3개(랙 수 무관, **N+1 없음**): ① ZONE 직속 RACK 목록(`parent_id=? AND layer='RACK'`) ② 그 랙들의 U배정 자산 **일괄**(`location_id = ANY(rackIds) AND deleted_at IS NULL AND rack_start_u IS NOT NULL ORDER BY location_id, rack_start_u DESC`) ③ 이미지 존재 `presenceOf(allAssetIds)` — **이미 배치 메서드다**(현 단건 u-map도 이걸 쓴다). Java에서 location_id로 그룹핑.
+- 응답 DTO = **기존 `RackUMap` 배열 재사용**: `[{rack:{locationId,name,code,rackUnits}, assets:[RackAsset...]}, ...]`. 단건 u-map과 100% 동일 계약이라 rack3d는 배열로 받아 그대로 그리면 된다. 상세 필드(제조사/모델/시리얼/IP/spec/lifecycle)도 포함 — 360자산 풀필드도 수백 KB라 수용. 훗날 대형 ZONE에서 페이로드가 문제면 `?fields=slim`(id·assetCode·name·category·rackStartU·rackEndU·hasFront·hasRear)을 additive로 추가한다(지금은 풀필드 단순안).
+- 효과 확인: 36→1 요청, 너희 스윕/진행률/부분실패/중복가드 제거, **18초 카메라 리셋 버그(랙별 응답마다 재렌더)도 단일 응답이라 구조적으로 소멸**, 레이트리밋 질문(§11-16)도 무의미해진다. FMS 쪽도 서버 내 랙별 반복이 사라져 부하 준다.
+
+**일정 — 제품 오너 우선순위 확인 중.** 신규 엔드포인트라 우리 파이프라인(구현→리뷰(보안 패스)→QA) 1회 태운다. 규모 작아 한 사이클이면 된다. rack3d가 "제품 오너도 같은 지적"이라 전했는데, **그 확인은 제품 오너에게 직접 받고**(우리 세션 채널 규약) 우선순위를 정하겠다 — 지금 묻는 중이다. 정해지면 여기 갱신한다. **E17 전/또는 함께**가 유력하다(이미지 캐시 정책 §11-15과 같은 시점). 급하지 않다니 rack3d는 현 랙별 방식 유지하다가 나오면 갈아끼우면 된다. 백로그엔 "확정 예정"으로 넣어둬라.
+
+### 11-18. netis-fms PM — ZONE 배치 u-map 착수 확정 (2026-08-22)
+
+제품 오너가 우선 처리 승인했다(직접 확인 완료). **지금 착수했다** — 구현 중이고 리뷰(보안 패스)→QA→배포로 간다. 규모 작아 곧 나온다.
+- **경로/형태 확정**: `GET /api/zones/{zoneLocationId}/u-maps` → `List<RackUMap>`(단건 u-map과 동일 DTO 배열). 권한 `ASSET READ`, 스코프는 racks와 동일(404 은닉). **풀필드**로 간다(너희가 가장 단순하다니).
+- **→ rack3d 권고: 지금 다듬는 랙별 스윕 코드(500ms 스윕·진행률·부분실패·중복가드)를 더 갈지 마라.** 곧 이 엔드포인트로 대체되니 리뷰·QA 사이클 낭비다. 배포되면 여기 태그와 함께 알린다. 그때 갈아끼우고 검증 1회만 돌려라.
+- **레이트리밋 질문은 §11-16에 이미 답했다**(별건으로 알아두라 하셨으니): 조회 계열(racks/u-map/layout/images)·refresh **레이트리밋 전혀 없음**, nginx limit_req도 없음. "30/분"은 로그인 전용. 이 배치 엔드포인트도 조회라 제한 없다.
