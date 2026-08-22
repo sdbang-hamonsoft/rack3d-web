@@ -20,8 +20,13 @@
   - **실응답 대조 라운드와 함께 처리** — 계약 불일치 수정과 묶어야 리뷰·QA 사이클이 한 번으로 끝난다
 - [ ] 빌드 환경 — 기본 PATH의 node가 x64라 `npm run build` 실패(rolldown 네이티브 바인딩 arm64만 설치됨). 맥미니 원격 빌드 시 `node -p process.arch` 확인 필요. 근본 해결은 아키텍처 일치 상태에서 `npm ci` 재실행
 - [ ] SSE 기반 실시간 갱신 검토 — **보류.** netis-fms `RealtimeHub`가 push하는 것은 `rawEvent`/`ticket`/`accessTag` 3종뿐이고 온도·전력 push 계획이 없음(회신 I-5). 장애 테이블에만 2단계로 붙일 값어치가 있는지 재검토
-- [ ] 3D 배치 좌표를 FMS로 이관 — **선행 조건 해소됨(2026-08-22).** `GET /api/layouts/zones/{id}/layout` 이 `grid{cols,rows,tileMm,ceilingMm}` + `objects[{type,x,z,dir,label,rack}]` 를 실제로 내려주는 것을 실측 확인
-  - 이관 시 LayoutEditor 의 좌표 편집도 로컬 저장 → FMS 저장(PUT, SETTINGS WRITE)으로 바뀐다. 권한이 없는 사용자는 편집 불가가 되므로 UI 분기 필요
+- [ ] 🛠 3D 배치 좌표를 FMS로 이관 (E18) — **우선순위 상향.** 제품 오너가 FMS 레이아웃 설정에서 랙 위치를 바꿔도 rack3d 에 반영되지 않는다고 보고(2026-08-22)
+  - **버그가 아니라 미구현이다.** `src/api/` 에 layouts 참조 0건, 좌표는 전부 `localStorage`(`rack3d-layout:<dataCenterId>`)에서 읽고 없으면 `autoArrangeRacks` 로 채운다
+  - API 는 정상 동작 확인: `grid{cols:12,rows:8,tileMm:600,ceilingMm:2800}` + `objects[{id,type,x,z,dir,label,rack,asset}]`
+  - ✅**확정 (2026-08-22, 사용자): 편집은 FMS 에서만. rack3d 는 읽기 전용.**
+    - LayoutEditor 의 좌표 편집·저장을 제거하고 보기 전용으로 바꾼다. `PUT` 을 쓰지 않으므로 SETTINGS WRITE 권한 분기도 불필요해진다
+    - 근거: 편집 지점이 두 곳이면 어느 쪽이 정답인지 흐려진다. 랙 추가·삭제를 이미 FMS SSOT 로 뺀 것(Q-8)과 일관된다
+  - netis-fms 협의 중(4건): 그리드 규격 수용 범위(`tileMm` 600 외 값·`ceilingMm` 반영) / `dir` 열거값 ↔ 도 매핑 기준 / CRAC·UPS 등 비-랙 오브젝트 렌더 여부(형상 없음 — 1차 제외 제안) / 기존 localStorage 처리와 layout 미설정 ZONE 표시
 - [ ] 🔵 netis-fms 장비 실물 이미지(FRONT/REAR)를 3D 랙 장비 앞뒤면 텍스처로 실시간 표시
   - 2026-08-21 PM 검토 완료: **재모델링 불필요**. 현재 GLB가 이미 `섀시 + 앞면 사진 평면 + 뒷면 사진 평면` 구조라(`*_PhotoFront`/`*_PhotoRear` 머티리얼) 런타임 텍스처 교체로 구현 가능. 진입점 `src/App.tsx:500 cloneModel()`
   - 부수효과: GLB 없는 장비(스위치/스토리지/PDU)도 "U높이 + 앞뒤 사진"으로 표현 가능 → 장비 확장이 모델링을 유발하지 않음
