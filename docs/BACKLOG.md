@@ -20,13 +20,16 @@
   - **실응답 대조 라운드와 함께 처리** — 계약 불일치 수정과 묶어야 리뷰·QA 사이클이 한 번으로 끝난다
 - [ ] 빌드 환경 — 기본 PATH의 node가 x64라 `npm run build` 실패(rolldown 네이티브 바인딩 arm64만 설치됨). 맥미니 원격 빌드 시 `node -p process.arch` 확인 필요. 근본 해결은 아키텍처 일치 상태에서 `npm ci` 재실행
 - [ ] SSE 기반 실시간 갱신 검토 — **보류.** netis-fms `RealtimeHub`가 push하는 것은 `rawEvent`/`ticket`/`accessTag` 3종뿐이고 온도·전력 push 계획이 없음(회신 I-5). 장애 테이블에만 2단계로 붙일 값어치가 있는지 재검토
-- [ ] 🛠 3D 배치 좌표를 FMS로 이관 (E18) — **우선순위 상향.** 제품 오너가 FMS 레이아웃 설정에서 랙 위치를 바꿔도 rack3d 에 반영되지 않는다고 보고(2026-08-22)
-  - **버그가 아니라 미구현이다.** `src/api/` 에 layouts 참조 0건, 좌표는 전부 `localStorage`(`rack3d-layout:<dataCenterId>`)에서 읽고 없으면 `autoArrangeRacks` 로 채운다
-  - API 는 정상 동작 확인: `grid{cols:12,rows:8,tileMm:600,ceilingMm:2800}` + `objects[{id,type,x,z,dir,label,rack,asset}]`
-  - ✅**확정 (2026-08-22, 사용자): 편집은 FMS 에서만. rack3d 는 읽기 전용.**
-    - LayoutEditor 의 좌표 편집·저장을 제거하고 보기 전용으로 바꾼다. `PUT` 을 쓰지 않으므로 SETTINGS WRITE 권한 분기도 불필요해진다
-    - 근거: 편집 지점이 두 곳이면 어느 쪽이 정답인지 흐려진다. 랙 추가·삭제를 이미 FMS SSOT 로 뺀 것(Q-8)과 일관된다
-  - netis-fms 협의 중(4건): 그리드 규격 수용 범위(`tileMm` 600 외 값·`ceilingMm` 반영) / `dir` 열거값 ↔ 도 매핑 기준 / CRAC·UPS 등 비-랙 오브젝트 렌더 여부(형상 없음 — 1차 제외 제안) / 기존 localStorage 처리와 layout 미설정 ZONE 표시
+- [ ] 🛠 3D 배치 좌표를 FMS로 이관 (E18) — **결정 5건 전부 확정, 착수 가능**
+  - 계기: 제품 오너가 FMS 레이아웃 설정에서 랙 위치를 바꿔도 rack3d 에 반영되지 않는다고 보고(2026-08-22). **버그가 아니라 미구현** — `src/api/` 에 layouts 참조 0건, 좌표는 전부 `localStorage`(`rack3d-layout:<dataCenterId>`)에서 읽고 없으면 `autoArrangeRacks` 로 채운다
+  - API: `GET /api/layouts/zones/{id}/layout` → `grid{cols,rows,tileMm,ceilingMm}` + `objects[{id,type,x,z,dir,label,rack,asset}]`
+  - **① 편집 지점** ✅확정(사용자): **FMS 에서만 편집. rack3d 는 읽기 전용.** LayoutEditor 의 좌표 편집·저장 제거 → `PUT` 도 SETTINGS WRITE 권한 분기도 불필요. 편집 지점이 두 곳이면 어느 쪽이 정답인지 흐려진다 — 랙 추가·삭제를 이미 FMS SSOT 로 뺀 것(Q-8)과 일관
+  - **② `dir` 규약** ✅확정(FMS 코드 근거, §11-30): 정확히 4방위(V24 CHECK). **`dir` = 랙 정면(FRONT) 방위**(COLUMN COMMENT 명시, FMS 는 변환·반전 없이 저장·서빙) → **E17 텍스처에서 앞뒤가 뒤집히지 않는다.** FRONT 를 `dir` 이 가리키는 면에, REAR 를 반대면에
+  - **③ 그리드 축** ✅확정: 원점 (0,0) = 좌상단, `grid_x` = 열(오른쪽 = EAST 증가), `grid_z` = 행(아래 = SOUTH 증가) → **NORTH = z 감소**. N→E→S→W 시계 방향이라 **NORTH 0° / EAST 90° / SOUTH 180° / WEST 270°**. 그리드 규격은 ZONE 별 값을 그대로 수용(**하드코딩 금지** — 현재 `GRID_COLUMNS 18`·`GRID_ROWS 14`·`TILE_SIZE 0.6` 상수를 버린다)
+  - **④ 비-랙 오브젝트** ✅확정(사용자): **1차에 포함.** "대강 구분만 되면 된다" → 3D 모델 확보 없이 **종류별 색 박스 + 레이블**. **미지원 type 은 회색 박스 + type 문자열 레이블**로 안전하게 넘겨 FMS 가 종류를 추가해도 안 깨지게 한다. 높이는 종류별 임의값(랙 약 2m 기준)
+  - **⑤ 미설정 ZONE** ✅확정(사용자): **자동 배치 금지.** `objects` 가 비면 3D 를 그리지 않고 "netis-fms 에서 레이아웃을 설정하세요" 안내. 기존 `localStorage` 배치는 무시·삭제(D1 일관)
+    - 근거: **실측 8개 ZONE 중 6개가 `objects` 0건**(ZONE 10 = 4, ZONE 19 = 1, 나머지 6 = 0). 임의 배치를 6개나 보여주면 표시를 붙여도 실제 배치로 오인된다 — 가짜 온도 그래프를 제거한 것과 같은 이유
+  - netis-fms 회신 대기(구현에 영향): `type` enum 전체 목록 / 오브젝트가 타일 1칸 고정인지(**현재 API 에 크기 필드가 없어 1칸 외에는 구현할 방법이 없다**)
 - [ ] 🔵 netis-fms 장비 실물 이미지(FRONT/REAR)를 3D 랙 장비 앞뒤면 텍스처로 실시간 표시
   - 2026-08-21 PM 검토 완료: **재모델링 불필요**. 현재 GLB가 이미 `섀시 + 앞면 사진 평면 + 뒷면 사진 평면` 구조라(`*_PhotoFront`/`*_PhotoRear` 머티리얼) 런타임 텍스처 교체로 구현 가능. 진입점 `src/App.tsx:500 cloneModel()`
   - 부수효과: GLB 없는 장비(스위치/스토리지/PDU)도 "U높이 + 앞뒤 사진"으로 표현 가능 → 장비 확장이 모델링을 유발하지 않음
