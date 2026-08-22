@@ -17,6 +17,11 @@ set -uo pipefail
 # ── 0. 입력 파싱 ───────────────────────────────────────────────────────────────
 # 실패하면 커밋을 막지 않는다(fail-open). 훅 자신의 버그로 작업이 멈추면 안 된다.
 payload="$(cat)" || exit 0
+
+# 빠른 탈출: 이 훅은 Bash 도구 호출 전부에 붙으므로, 커밋과 무관한 호출에서
+# python 을 띄우지 않는다(호출당 수십 ms 가 매번 쌓인다).
+printf '%s' "$payload" | grep -q 'commit' || exit 0
+
 command_line="$(printf '%s' "$payload" | python3 -c 'import json,sys
 try:
     print(json.load(sys.stdin).get("tool_input", {}).get("command", ""))
