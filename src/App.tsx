@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { ContactShadows, Environment, Html, Lightformer, OrbitControls, useCursor, useGLTF } from '@react-three/drei'
 import * as THREE from 'three'
@@ -15,7 +15,18 @@ import {
 import type { RackCacheEntry, SceneGrid, SceneObject, ScenePlacement } from './rackLayouts'
 import type { RackData, ServerData, ServerModel } from './rackLayouts'
 import { collectZones, fetchSidebar, fetchZoneLayout, fetchZoneRacks, fetchZoneUMaps, type ZoneSummary } from './api/fms'
-import type { MeResponse, RackSummary, RackSeverity, RackUMap, ZoneLayout } from './api/types'
+import type { AssetImageView, MeResponse, RackSummary, RackSeverity, RackUMap, ZoneLayout } from './api/types'
+import {
+  PHOTO_DEMAND_FRONT,
+  PHOTO_DEMAND_REAR,
+  clearAssetPhotoCache,
+  clearPhotoDemand,
+  getPhotoDemand,
+  loadAssetPhoto,
+  publishPhotoDemand,
+  subscribePhotoDemand,
+  type PhotoDemandInput,
+} from './assetPhotos'
 import { bootstrapSession, goToFmsLogin, goToFmsPasswordChange } from './api/session'
 import { MANUAL_RETRY_COOLDOWN_MS, usePolledResource } from './hooks/usePolledResource'
 import {
@@ -86,6 +97,19 @@ const LAYOUT_RETRY_INTERVAL_MS = 30_000
  */
 const UNIT_HEIGHT = RACK_UNIT_HEIGHT_M
 const RACK_INNER_BOTTOM = RACK_BASE_HEIGHT_M
+/**
+ * GLB 캐시 버전 — **모델을 다시 구우면 이 값을 올린다.**
+ *
+ * 우리 nginx가 `.glb`에 `Cache-Control: public, max-age=15552000`(6개월)을 걸기 때문에
+ * (`deploy/nginx/default.conf`의 정적 자산 location), 파일명이 그대로면 새 모델을 배포해도
+ * 기존 사용자는 최대 6개월 옛 모델을 본다. 번들 JS·CSS는
+ * 파일명 해시가 있어 안전하지만 `public/` 자산은 그 보호를 받지 못한다.
+ *
+ * ⚠️ **장비 3종뿐 아니라 랙 GLB도 이 파라미터를 쓴다.** 예전에는 랙만 빠져 있었는데,
+ * 안 드러난 이유는 랙 모델을 아직 안 바꿨기 때문일 뿐이다 — 바꾸는 날 "장비는 갱신됐는데
+ * 랙만 안 바뀐다"로 나타나고 원인 추적이 오래 걸린다. **URL은 `useGLTF`와
+ * `useGLTF.preload` 양쪽이 정확히 같아야** 프리로드가 효과를 낸다(다르면 두 번 받는다).
+ */
 const MODEL_VERSION = '11'
 const SPLASH_DURATION = 3600
 const RACK_FOCUS_HEIGHT = 1.06
@@ -208,6 +232,28 @@ function formatUnitRange(server: ServerData) {
   return server.units === 1 ? first : `${first}–U${String(lastU).padStart(2, '0')}`
 }
 
+/**
+ * 3D 장비 앞뒤면 그림의 **출처 표기**(C7).
+ *
+ * 형상은 GLB 3종 근사라 앞뒤면에 **다른 장비의 사진이 구워져 있다.** netis-fms에 이 자산의
+ * 실물 사진이 있으면 그것으로 덮지만(E17), 없으면 구워진 그림이 그대로 남는다 —
+ * 그때 아무 말도 하지 않으면 관제자가 그 그림을 이 장비의 실물로 읽는다.
+ *
+ * ⚠️ **이 문구가 말하는 것은 "FMS에 등록되어 있다"는 사실뿐이지, "지금 화면에 붙어 있다"가
+ * 아니다.** 판정 근거인 `hasFront`/`hasRear`는 u맵 메타이고, 텍스처가 실제로 붙었는지는
+ * 알지 못한다 — 사진 요청은 카메라가 가까울 때만 나가고({@link AssetPhotoPlanner}), 배치가
+ * 없는 랙은 3D에 그려지지도 않아 **검색으로 고르면 요청이 0건**이며, 403·404·타임아웃으로
+ * 실패하면 GLB 기본 사진이 그대로 남는다. 그래서 "이 그림이 이 자산이다"라고 단언하면
+ * 상시 틀리는 경로가 생긴다(C6·C7). 적용 여부까지 말하려면 `useAssetPhoto`의 성공 여부를
+ * 자산별 상태로 올려 여기서 읽어야 한다 — 지금은 그 연결이 없으므로 등록 사실만 말한다.
+ */
+function serverPhotoNote(server: ServerData): string {
+  if (server.hasFront && server.hasRear) return ' 앞뒤면 실물 사진이 netis-fms에 등록되어 있습니다 — 3D에는 가까이서 볼 때 반영되고, 반영 전 그림은 이 자산의 사진이 아닙니다.'
+  if (server.hasFront) return ' 앞면 실물 사진만 netis-fms에 등록되어 있습니다 — 3D 앞면에 가까이서 볼 때 반영되고, 반영 전 앞면과 뒷면 그림은 이 자산의 사진이 아닙니다.'
+  if (server.hasRear) return ' 뒷면 실물 사진만 netis-fms에 등록되어 있습니다 — 3D 뒷면에 가까이서 볼 때 반영되고, 반영 전 뒷면과 앞면 그림은 이 자산의 사진이 아닙니다.'
+  return ' 앞뒤면 그림은 형상 모델에 구워진 기본 이미지입니다 — netis-fms에 이 자산의 실물 사진이 없습니다.'
+}
+
 /** 값이 없는 텍스트 필드는 지어내지 않고 `—`로 둔다(C6·C7). */
 function orDash(value: string | null | undefined) {
   const text = value?.trim()
@@ -280,6 +326,11 @@ function RackUnitMap({
   )
 }
 
+/**
+ * GLB 인스턴스 1벌. **머티리얼을 복제하는 것이 핵심이다** — `useGLTF`는 같은 URL의 씬을
+ * 캐시해 돌려주므로 복제하지 않으면 장비 한 대의 텍스처 교체가 같은 모델을 쓰는 전 장비에
+ * 번진다(E17이 자산별 사진을 붙이는 근거가 여기다).
+ */
 function cloneModel(scene: Group) {
   const clone = scene.clone(true)
   clone.traverse((child) => {
@@ -289,6 +340,147 @@ function cloneModel(scene: Group) {
     child.material = child.material.clone()
   })
   return clone
+}
+
+/**
+ * 장비 GLB의 사진 평면 1면(앞 또는 뒤).
+ *
+ * 우리 GLB 3종은 통짜 모델이 아니라 **섀시 박스 + 앞면 사진 평면 + 뒷면 사진 평면**이다
+ * (실측: `DELL_Front` z=+0.3775 / `DELL_Rear` z=−0.3775, 머티리얼 `*_PhotoFront`·`*_PhotoRear`).
+ * 그래서 재모델링 없이 그 머티리얼의 텍스처만 갈아끼우면 자산별 실물 사진이 된다.
+ *
+ * ⚠️ 앞뒤 규약은 `rackLayouts.ts`의 `directionToRotation` 주석이 SSOT다 — **로컬 +Z가 정면**이고
+ * `dir`은 정면이 향하는 방위다(§11-30). GLB의 `*_PhotoFront` 평면이 +Z에 있으므로 FRONT를
+ * 그쪽에 붙이면 맞는다. E18에서 노드 실측으로 확정했으므로 다시 확인하지 않는다.
+ */
+type PhotoPlane = {
+  mesh: THREE.Mesh
+  material: THREE.MeshStandardMaterial
+  /** GLB에 구워진 기본 사진. 자산 사진을 못 받으면 **여기로 되돌린다**(C6 — 남의 사진 금지). */
+  bakedMap: THREE.Texture | null
+  bakedEmissiveMap: THREE.Texture | null
+  /** 지오메트리 실측 폭·높이(m). 종횡비 보정의 기준값이다. */
+  width: number
+  height: number
+}
+
+type PhotoPlanes = { front: PhotoPlane | null; rear: PhotoPlane | null }
+
+function toPhotoPlane(mesh: THREE.Mesh, material: THREE.MeshStandardMaterial): PhotoPlane | null {
+  mesh.geometry.computeBoundingBox()
+  const box = mesh.geometry.boundingBox
+  if (!box) return null
+  return {
+    mesh,
+    material,
+    bakedMap: material.map,
+    bakedEmissiveMap: material.emissiveMap,
+    width: box.max.x - box.min.x,
+    height: box.max.y - box.min.y,
+  }
+}
+
+/**
+ * 사진 평면 찾기 — **머티리얼 이름 접미사**로 고른다(`DELL_PhotoFront`·`C240_PhotoRear` …).
+ * 모델별로 접두사가 다르고 메시 이름도 제각각(`DELL_Front`·`P_Front`)이라 접미사가 유일하게
+ * 공통된 단서다. 못 찾으면 `null`이고, 그때는 이 장비에 사진을 붙이지 않는다.
+ */
+function findPhotoPlanes(model: Group): PhotoPlanes {
+  const planes: PhotoPlanes = { front: null, rear: null }
+  model.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return
+    const material = child.material
+    if (Array.isArray(material) || !(material instanceof THREE.MeshStandardMaterial)) return
+    if (!planes.front && material.name.endsWith('PhotoFront')) planes.front = toPhotoPlane(child, material)
+    else if (!planes.rear && material.name.endsWith('PhotoRear')) planes.rear = toPhotoPlane(child, material)
+  })
+  return planes
+}
+
+/**
+ * 종횡비 보정 상한·하한.
+ *
+ * FMS 이미지(1U 기준 11.0)와 우리 사진 평면(10.01)의 차이는 약 1.10배다 —
+ * 19인치가 **마운팅 이어를 포함한 패널 전폭(482.6 mm)**인 반면 GLB 평면은 섀시 본체 폭
+ * (445 mm) 기준으로 구워져 있어서다(§11-14). 정상 범위는 1.10 근처인데, 세로 사진처럼
+ * 엉뚱한 비율이 들어오면 평면이 랙을 뚫고 나간다. 그때는 **보정을 포기하고 1배로 둔다** —
+ * 화면을 망가뜨리느니 10% 어긋난 채로 두는 편이 낫다.
+ */
+const PHOTO_ASPECT_SCALE_MIN = 0.5
+const PHOTO_ASPECT_SCALE_MAX = 2
+
+/**
+ * 사진 붙이기 + 종횡비 보정.
+ *
+ * **높이는 건드리지 않는다** — 평면의 세로는 자산의 U 점유(실데이터)에서 나온 물리 치수다.
+ * 가로만 이미지 실비율에 맞춰 늘려 `가로/세로 = 이미지 가로/세로`가 되게 한다.
+ * 결과는 445 mm → 약 489 mm로, 실제 랙에서 정면으로 보이는 **이어 포함 전폭**에 가까워진다
+ * (평면을 다시 굽는 대신 rack3d가 흡수하기로 FMS와 합의한 방식, §11-14·§11-15).
+ * 늘려서 왜곡시키는 것이 아니라 **왜곡되지 않도록** 폭을 맞추는 것이다.
+ *
+ * `emissiveMap`도 같이 간다 — GLB 머티리얼이 baseColor와 **같은 이미지**를 emissive(0.1)로
+ * 겹쳐 쓰기 때문에, 한쪽만 바꾸면 옛 사진이 10% 세기로 비쳐 유령처럼 남는다.
+ */
+function applyPhotoTexture(plane: PhotoPlane, texture: THREE.Texture, aspect: number, heightScale: number) {
+  plane.material.map = texture
+  if (plane.bakedEmissiveMap) plane.material.emissiveMap = texture
+  plane.material.needsUpdate = true
+
+  const worldHeight = plane.height * heightScale
+  const scaleX = plane.width > 0 && worldHeight > 0 ? (worldHeight * aspect) / plane.width : 1
+  plane.mesh.scale.x = scaleX >= PHOTO_ASPECT_SCALE_MIN && scaleX <= PHOTO_ASPECT_SCALE_MAX ? scaleX : 1
+}
+
+/** 자산 사진을 떼고 GLB 기본 사진으로 되돌린다(수요 해제·언마운트). */
+function restorePhotoTexture(plane: PhotoPlane) {
+  plane.material.map = plane.bakedMap
+  plane.material.emissiveMap = plane.bakedEmissiveMap
+  plane.material.needsUpdate = true
+  plane.mesh.scale.x = 1
+}
+
+/**
+ * 자산 사진 1면을 이 장비에 붙인다.
+ *
+ * 텍스처는 **이 훅이 소유한다** — 정리(언마운트·수요 해제) 때 반드시 `dispose()`한다.
+ * three.js 텍스처는 dispose 하지 않으면 GPU 메모리에 남아, 전산실을 오갈 때마다 쌓인다(C12).
+ */
+function useAssetPhoto(
+  plane: PhotoPlane | null,
+  assetId: number,
+  view: AssetImageView,
+  available: boolean,
+  wanted: boolean,
+  heightScale: number,
+) {
+  useEffect(() => {
+    if (!plane || !available || !wanted) return
+    let cancelled = false
+    let texture: THREE.Texture | null = null
+
+    loadAssetPhoto(assetId, view)
+      .then((photo) => {
+        if (cancelled) return
+        texture = new THREE.Texture(photo.image)
+        // glTF 규약: UV 원점이 좌상단이라 GLTFLoader가 flipY=false로 올린다.
+        // 우리 평면의 UV도 그 규약으로 구워져 있어(v=0이 위) 여기서 맞추지 않으면 사진이 뒤집힌다.
+        texture.flipY = false
+        texture.colorSpace = THREE.SRGBColorSpace
+        texture.anisotropy = 4
+        texture.needsUpdate = true
+        applyPhotoTexture(plane, texture, photo.aspect, heightScale)
+      })
+      .catch(() => {
+        // 사진이 없거나 못 받았다 — **GLB 기본 사진을 그대로 둔다.** 다른 장비 사진으로
+        // 대신 채우지 않는다(C6). 실패 사유는 화면에 내지 않는다(C8).
+      })
+
+    return () => {
+      cancelled = true
+      restorePhotoTexture(plane)
+      texture?.dispose()
+    }
+  }, [plane, assetId, view, available, wanted, heightScale])
 }
 
 /**
@@ -320,6 +512,21 @@ function Server({
   const y = RACK_INNER_BOTTOM + (server.startU - 1 + server.units / 2) * UNIT_HEIGHT
   /** 고른 GLB의 고유 U 대비 실제 U — 1이 아니면 늘리거나 눌러 실제 점유 높이를 맞춘다. */
   const heightScale = server.units / SERVER_MODEL_UNITS[server.model]
+
+  /**
+   * netis-fms 장비 실물 사진(E17).
+   *
+   * 어떤 사진을 지금 붙일지는 **이 컴포넌트가 정하지 않는다** — 씬의 {@link AssetPhotoPlanner}가
+   * 카메라 위치·랙 방향·포커스를 보고 정하고, 여기서는 자기 자산의 결정만 구독한다.
+   * 그래서 진입 즉시 전량 로딩이 구조적으로 불가능하다(랙 수십 대 × 장비 수백 대 대비).
+   */
+  const photoPlanes = useMemo(() => findPhotoPlanes(model), [model])
+  const photoDemand = useSyncExternalStore(
+    useCallback((onChange: () => void) => subscribePhotoDemand(server.assetId, onChange), [server.assetId]),
+    useCallback(() => getPhotoDemand(server.assetId), [server.assetId]),
+  )
+  useAssetPhoto(photoPlanes.front, server.assetId, 'FRONT', server.hasFront, (photoDemand & PHOTO_DEMAND_FRONT) !== 0, heightScale)
+  useAssetPhoto(photoPlanes.rear, server.assetId, 'REAR', server.hasRear, (photoDemand & PHOTO_DEMAND_REAR) !== 0, heightScale)
 
   return (
     <group
@@ -509,7 +716,7 @@ function Rack({
   onSelect: (rack: RackData) => void
   onSelectServer: (rack: RackData, server: ServerData) => void
 }) {
-  const { scene } = useGLTF(assetUrl('models/rack-42u.glb'), GLTF_USE_DRACO, GLTF_USE_MESHOPT)
+  const { scene } = useGLTF(assetUrl(`models/rack-42u.glb?v=${MODEL_VERSION}`), GLTF_USE_DRACO, GLTF_USE_MESHOPT)
   const model = useMemo(() => cloneModel(scene), [scene])
   const [hovered, setHovered] = useState(false)
   // 랙 경보의 SSOT는 FMS 판정(`severity`)이다. 장비 단위 상태는 소스가 없다(A6 = b).
@@ -645,6 +852,103 @@ function Rack({
       )}
     </group>
   )
+}
+
+/**
+ * 사진 수요 계획 간격(ms).
+ *
+ * 매 프레임 다시 계산할 이유가 없다 — 카메라가 60 fps로 움직여도 "어느 랙이 가까운가"는
+ * 그 속도로 바뀌지 않는다. 0.4초면 사람이 시점을 옮기고 사진이 뜨기까지 지연으로 느끼지
+ * 않으면서, 랙 36대 × 장비 10대(=720건) 계산이 초당 2.5회로 묶인다.
+ */
+const PHOTO_PLAN_INTERVAL_MS = 400
+
+/** 랙 중심 높이(m) — 거리 계산 기준점. 42U 랙의 대략 중간이다. */
+const RACK_CENTER_Y = 1
+
+/**
+ * 어떤 장비의 어느 면 사진을 지금 받을지 정한다(E17 로딩 정책).
+ *
+ * **진입 시 전량 로딩을 하지 않는다.** 지금 UAT 데이터(자산 8대·160 KB)로는 전량 로딩도
+ * 멀쩡해 보이지만, 실고객은 랙 수십 대 × 장비 수백 대이고 GPU 텍스처는 압축이 풀린 픽셀로
+ * 올라간다. 그래서 카메라를 기준으로 **가까운 랙의 앞면부터** 받고, 뒷면은 **카메라가 실제로
+ * 뒤를 보고 있을 때(또는 랙 포커스 시)만** 받는다. 임계값과 근거는 `assetPhotos.ts` 상단에 있다.
+ *
+ * 이 컴포넌트는 아무것도 그리지 않는다 — `useFrame`으로 카메라를 읽기 위해 씬 안에 있을 뿐이다.
+ */
+function AssetPhotoPlanner({
+  racks,
+  grid,
+  focusedRackId,
+}: {
+  racks: RackData[]
+  grid: SceneGrid | null
+  focusedRackId: string | null
+}) {
+  const { camera } = useThree()
+  const lastPlanAt = useRef(0)
+  const rackToCamera = useRef(new THREE.Vector3())
+
+  /** 랙별 고정값(월드 좌표·정면 법선·자산 목록). 배치나 u맵이 바뀔 때만 다시 만든다. */
+  const plan = useMemo(() => {
+    if (!grid) return []
+    // 배치가 없는 랙(3D에 안 그려진다)과 장비 0대인 랙은 계산에서 뺀다.
+    return racks.flatMap((rack) => {
+      const placement = rack.placement
+      if (!placement || rack.servers.length === 0) return []
+      return [{
+        id: rack.id,
+        x: placement.tileX * grid.tileSize,
+        z: placement.tileZ * grid.tileSize,
+        // 로컬 +Z가 정면이므로 Y회전 θ에서 정면 법선은 (sin θ, 0, cos θ)다(§11-30).
+        normalX: Math.sin(placement.rotation),
+        normalZ: Math.cos(placement.rotation),
+        servers: rack.servers,
+      }]
+    })
+  }, [racks, grid])
+
+  // 씬 구성이 바뀌면(u맵 도착 등) 다음 프레임에 곧바로 다시 계산한다 — 최대 0.4초를 기다리면
+  // 장비가 나타나고 사진이 뜨기까지가 눈에 띄게 늦다.
+  useEffect(() => {
+    lastPlanAt.current = 0
+  }, [plan, focusedRackId])
+
+  useFrame(() => {
+    const now = performance.now()
+    if (now - lastPlanAt.current < PHOTO_PLAN_INTERVAL_MS) return
+    lastPlanAt.current = now
+
+    const inputs: PhotoDemandInput[] = []
+    plan.forEach((rack) => {
+      rackToCamera.current.set(camera.position.x - rack.x, camera.position.y - RACK_CENTER_Y, camera.position.z - rack.z)
+      const distanceM = rackToCamera.current.length()
+      // 수평 성분만으로 앞뒤를 가른다 — 위에서 내려다보는 시점에서 Y가 섞이면
+      // 정면을 보고 있는데도 "뒤에 있다"로 판정된다.
+      const horizontal = Math.hypot(rackToCamera.current.x, rackToCamera.current.z)
+      const facingCos = horizontal > 0
+        ? (rack.normalX * rackToCamera.current.x + rack.normalZ * rackToCamera.current.z) / horizontal
+        : 1
+      const focused = rack.id === focusedRackId
+      rack.servers.forEach((server) => {
+        inputs.push({
+          assetId: server.assetId,
+          hasFront: server.hasFront,
+          hasRear: server.hasRear,
+          distanceM,
+          facingCos,
+          focused,
+        })
+      })
+    })
+    publishPhotoDemand(inputs)
+  })
+
+  // 씬을 떠나면 수요를 비운다 — 장비 컴포넌트는 어차피 언마운트되며 텍스처를 반납하지만(C12),
+  // 남은 수요가 다음 전산실의 계산에 섞이지 않게 한다.
+  useEffect(() => () => clearPhotoDemand(), [])
+
+  return null
 }
 
 /** 바닥 — **규격은 전부 FMS ZONE 응답값**이다(cols/rows/tileMm). 상수로 굳히지 말 것(§11-30). */
@@ -959,6 +1263,7 @@ function DataCenterScene({
         )}
       </Suspense>
       <CameraController grid={grid} focusRack={focusedRack} focusServer={selectedServer} />
+      <AssetPhotoPlanner racks={racks} grid={grid} focusedRackId={focusedRack?.id ?? null} />
     </>
   )
 }
@@ -1268,7 +1573,7 @@ function ServerDetailPanel({
         <p className="rack-source-note">
           {serverModelLabels[server.model]} 형상을 {server.units}U 높이에 맞춰 표시합니다.
           실제 제조사·모델명은 위 ASSET REGISTER 값입니다.
-          {server.hasFront || server.hasRear ? ' 실물 사진(FRONT/REAR)이 등록되어 있습니다 — 3D 텍스처 적용은 후속 작업입니다.' : ''}
+          {serverPhotoNote(server)}
         </p>
       </section>
 
@@ -2034,7 +2339,7 @@ function useZoneScene(
 }
 
 function preloadSceneAssets() {
-  useGLTF.preload(assetUrl('models/rack-42u.glb'), GLTF_USE_DRACO, GLTF_USE_MESHOPT)
+  useGLTF.preload(assetUrl(`models/rack-42u.glb?v=${MODEL_VERSION}`), GLTF_USE_DRACO, GLTF_USE_MESHOPT)
   useGLTF.preload(assetUrl(`models/dell-poweredge-r760.glb?v=${MODEL_VERSION}`), GLTF_USE_DRACO, GLTF_USE_MESHOPT)
   useGLTF.preload(assetUrl(`models/hpe-proliant-dl360-gen11.glb?v=${MODEL_VERSION}`), GLTF_USE_DRACO, GLTF_USE_MESHOPT)
   useGLTF.preload(assetUrl(`models/cisco-ucs-c240-m7.glb?v=${MODEL_VERSION}`), GLTF_USE_DRACO, GLTF_USE_MESHOPT)
@@ -2073,6 +2378,18 @@ function App() {
       setSession(result.status === 'authenticated' ? { status: 'ready', me: result.me } : { status: result.status === 'password-change' ? 'password-change' : 'expired' })
     })
   }, [])
+
+  /**
+   * C12 — 세션이 끝나면 자산 사진 캐시를 비운다.
+   *
+   * GPU 텍스처는 씬이 언마운트되며 이미 반납된다(`useAssetPhoto`의 정리). 여기서 버리는 것은
+   * **디코드된 이미지와 메타**다 — 다른 사용자로 다시 로그인했을 때 이전 사용자의 권한으로
+   * 받은 자산 사진이 메모리에 남아 있으면 안 된다.
+   */
+  useEffect(() => {
+    if (sessionReady) return
+    clearAssetPhotoCache()
+  }, [sessionReady])
 
   const zoneFetcher = useMemo(
     () => (sessionReady ? async () => collectZones((await fetchSidebar()).roots) : null),

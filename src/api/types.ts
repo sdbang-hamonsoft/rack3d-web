@@ -114,9 +114,46 @@ export type RackAsset = {
   rackStartU: number
   /** 끝 U(포함). 높이 = `rackEndU - rackStartU + 1`. */
   rackEndU: number
-  /** 자산 실물 이미지 보유 여부(E17). 3D 텍스처는 별도 작업이라 지금은 쓰지 않는다. */
+  /**
+   * 자산 실물 이미지 보유 여부(E17).
+   *
+   * **false면 이미지 엔드포인트를 아예 부르지 않는다** — 없는 줄 알면서 404를 받아내는 요청은
+   * 랙 수십 대 규모에서 수백 건의 헛된 왕복이 된다.
+   */
   hasFront: boolean
   hasRear: boolean
+}
+
+/** 자산 이미지의 면. FMS 경로 세그먼트 값 그대로다(`/images/{FRONT|REAR}`). */
+export type AssetImageView = 'FRONT' | 'REAR'
+
+/**
+ * `GET /api/assets/{assetId}/images`의 한 면(ASSET READ).
+ * 필드는 **실응답 실측**이다(자산 5 FRONT: `image/png` · 869 B · sha256 64자 · ISO-8601 `uploadedAt`).
+ *
+ * `sha256`은 **캐시 무효화의 SSOT다**(§11-15). 이미지 요청에 `?v=<sha256>`로 붙이면 FMS가
+ * `Cache-Control: private, max-age=31536000, immutable`로 답하고, 사진이 교체되면 sha가 바뀌어
+ * URL 자체가 바뀐다 → 재검증 0건·stale 0건.
+ *
+ * ⚠️ **고정 URL에 그냥 `immutable`을 걸면 안 된다** — 프레시니스 동안 재검증이 막혀 사진을
+ * 갈아끼워도 옛 바이트가 계속 나온다(FMS가 짚어 준 함정, §11-15).
+ */
+export type AssetImageMeta = {
+  view: AssetImageView
+  contentType: string
+  byteSize: number
+  /** 원본 바이트의 SHA-256 소문자 16진 64자(실측). */
+  sha256: string
+  uploadedAt: string
+}
+
+/**
+ * `GET /api/assets/{assetId}/images` — 앞/뒤 이미지 메타(ASSET READ).
+ * 해당 면이 없으면 `null`이다. **없는 면을 다른 면으로 대신 채우지 않는다**(C6).
+ */
+export type AssetImages = {
+  front: AssetImageMeta | null
+  rear: AssetImageMeta | null
 }
 
 /** `RackMapDtos.RackUMap.rack` — u맵 응답의 랙 헤더. */

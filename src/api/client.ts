@@ -281,7 +281,14 @@ async function readErrorCode(response: Response): Promise<string | null> {
   }
 }
 
-async function request<T>(method: string, path: string): Promise<T> {
+/**
+ * 인증·재시도·에러 변환까지 끝낸 응답. 본문 해석(JSON/blob)은 호출부가 정한다.
+ *
+ * JSON 전용이던 것을 여기서 갈랐다 — E17 장비 사진 텍스처는 **바이너리**로 받아야 하는데
+ * (같은 오리진이라 `fetch` → `blob` 경로, §9 D4), 401 재시도·세션 파기·`ErrorResponse` 처리는
+ * JSON 요청과 **한 글자도 다르면 안 된다.** 두 벌로 복제하면 한쪽만 고쳐지는 날이 온다.
+ */
+async function requestResponse(method: string, path: string): Promise<Response> {
   let response = await rawRequest(method, path)
 
   if (response.status === 401 && isRetryablePath(path)) {
@@ -312,10 +319,26 @@ async function request<T>(method: string, path: string): Promise<T> {
     throw new ApiError(response.status, code, parseRetryAfter(response))
   }
 
+  return response
+}
+
+async function request<T>(method: string, path: string): Promise<T> {
+  const response = await requestResponse(method, path)
   if (response.status === 204) return undefined as T
   return (await response.json()) as T
 }
 
+/**
+ * 바이너리 본문(장비 사진). 204는 "본문 없음"이므로 빈 Blob이 아니라 오류로 올린다 —
+ * 빈 이미지를 텍스처로 올리면 화면에 **검은 판**이 붙고, 그건 "사진이 없다"와 구분되지 않는다(C6).
+ */
+async function requestBlob(method: string, path: string): Promise<Blob> {
+  const response = await requestResponse(method, path)
+  if (response.status === 204) throw new ApiError(response.status, 'EMPTY_BODY')
+  return await response.blob()
+}
+
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
+  getBlob: (path: string) => requestBlob('GET', path),
 }

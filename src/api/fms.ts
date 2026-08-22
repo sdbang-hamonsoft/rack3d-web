@@ -5,7 +5,16 @@
  */
 
 import { ApiError, api, NETWORK_ERROR_STATUS } from './client'
-import type { MeResponse, RackSummary, RackUMap, SidebarNode, SidebarResponse, ZoneLayout } from './types'
+import type {
+  AssetImageView,
+  AssetImages,
+  MeResponse,
+  RackSummary,
+  RackUMap,
+  SidebarNode,
+  SidebarResponse,
+  ZoneLayout,
+} from './types'
 
 /** `GET /api/auth/me` — 사용자·권한 요약(인증만 필요). */
 export function fetchMe(): Promise<MeResponse> {
@@ -72,6 +81,54 @@ export function fetchZoneLayout(zoneId: number): Promise<ZoneLayout> {
     return Promise.reject(new ApiError(NETWORK_ERROR_STATUS, 'INVALID_ZONE_ID'))
   }
   return api.get<ZoneLayout>(`/layouts/zones/${zoneId}/layout`)
+}
+
+// ── 장비 실물 사진(E17) ──────────────────────────────────────────────────────
+
+/** 자산 id 검증 — C5 신뢰 경계. id는 **u맵 응답이 준 값만** 온다. */
+function assetPath(assetId: number): string | null {
+  return Number.isInteger(assetId) && assetId > 0 ? `/assets/${assetId}` : null
+}
+
+/**
+ * `GET /api/assets/{assetId}/images` — 앞/뒤 사진 메타(ASSET READ).
+ *
+ * 바이트를 받기 전에 이걸 먼저 부르는 이유는 **`sha256`** 하나다 — 텍스처 URL에 `?v=<sha>`로
+ * 붙여야 FMS가 장기 캐시로 답하고(§11-15), 사진이 교체되면 URL이 바뀌어 자동 반영된다.
+ */
+export function fetchAssetImages(assetId: number): Promise<AssetImages> {
+  const path = assetPath(assetId)
+  if (!path) return Promise.reject(new ApiError(NETWORK_ERROR_STATUS, 'INVALID_ASSET_ID'))
+  return api.get<AssetImages>(`${path}/images`)
+}
+
+/**
+ * `sha256`은 FMS가 준 값이지만 URL에 넣기 전에 형태를 확인한다(C5) — **소문자** 16진 64자.
+ *
+ * 대소문자를 함께 받지 않는 이유: 같은 바이트가 `?v=ABC…`/`?v=abc…` 두 URL로 갈리면
+ * 브라우저 캐시도 `photoCacheKey`도 이중으로 잡힌다. 실측상 FMS는 소문자로만 주므로
+ * (§11-15·`types.ts`) 대문자가 오면 계약을 벗어난 값으로 보고 `v`를 **붙이지 않는다** —
+ * 그래도 사진은 그대로 나오고 캐시 수명만 짧아진다(지어낸 값으로 채우는 것보다 안전하다).
+ */
+const SHA256_HEX = /^[0-9a-f]{64}$/
+
+/**
+ * `GET /api/assets/{assetId}/images/{view}?variant=texture&v=<sha>` — 3D 텍스처용 축소본.
+ *
+ * - `variant=texture`: FMS가 만든 JPEG 파생본(원본은 PNG). **실측 880 × 80×U**
+ *   (자산 5 = 2U → 880×160 · 9,855 B, 자산 45 = 4U → 880×320 · 13,267 B).
+ *   "1024px 축소본"이라는 계약이지만 원본이 이미 폭 880이라 실제로는 줄어들지 않는다.
+ * - `v=<sha256>`: 캐시 키(§11-15). FMS가 `v` 분기를 배포하기 전이어도 **동작에는 영향이 없다** —
+ *   지금은 기존 `max-age=60`으로 응답할 뿐이다(실측 확인).
+ *
+ * sha를 모르면 `v`를 **붙이지 않는다.** 아무 값이나 채우면 사진이 교체돼도 URL이 그대로라
+ * 1년짜리 캐시에 옛 바이트가 박힌다 — 지어낸 값이 정확히 사고가 되는 자리다(C6).
+ */
+export function fetchAssetPhoto(assetId: number, view: AssetImageView, sha256: string | null): Promise<Blob> {
+  const path = assetPath(assetId)
+  if (!path) return Promise.reject(new ApiError(NETWORK_ERROR_STATUS, 'INVALID_ASSET_ID'))
+  const version = sha256 && SHA256_HEX.test(sha256) ? `&v=${encodeURIComponent(sha256)}` : ''
+  return api.getBlob(`${path}/images/${view}?variant=texture${version}`)
 }
 
 // ── 사이드바 트리 → 전산실(ZONE) 목록 ────────────────────────────────────────
