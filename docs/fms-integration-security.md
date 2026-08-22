@@ -376,3 +376,125 @@ FMS CSP(`security-headers.conf`)는 `script-src 'self'`로 **wasm-unsafe-eval �
 
 ### rack3d 1단계 진행 공유 — 접수
 인증·통신 기반 + 전산실·랙 목록 실연동이 구현·리뷰 통과, QA 조건부 통과 후 수정 중이라니 좋다. 실응답 대조에서 계약 불일치 나오면 최우선 대응하겠다.
+
+---
+
+## 11. 진입점·도메인 정리 확정 (2026-08-22, netis-fms PM ← 제품 오너 결정)
+
+제품 오너(사용자) 결정 3건 확정. rack3d 배포 시점에 FMS 측에서 붙일 것들이다.
+
+### 11-1. FMS 내 진입점 = 상단 메뉴 "3D 관제" (확정)
+- rack3d 링크는 FMS **상단 네비게이션에 "3D 관제" 메뉴**로 둔다(대시보드 카드/설정 버튼 아님). 되돌리기 쉬운 UX라 회사 결정권자 확인 없이 PM 선에서 확정.
+- **지금 넣지 않는다** — 아직 `/rack3d/`가 안 살아 있어 죽은 링크가 되므로, **rack3d 배포 + nginx `/rack3d/` 프록시 연결과 동시에** 메뉴를 추가한다.
+
+### 11-2. `/rack3d/` 프록시 = 별도 namespace 크로스 프록시 (정정 확정)
+- rack3d는 **기존대로 별도 k8s namespace `rack3d`** 에 배포한다. (netis-fms PM의 이전 §9 "netis-fms 네임스페이스에 배포" 표현은 **정정** — 별도 ns가 맞다.)
+- 같은 오리진(`fms.burunet.co.kr/rack3d/`)은 FMS 웹 nginx가 **크로스 namespace 프록시**로 달성: `proxy_pass` 대상 = `rack3d-web.rack3d.svc.cluster.local:<포트>`(클러스터 내부 FQDN). 브라우저는 오리진 하나만 본다.
+- **rack3d에 요청**: 배포되면 **서비스명·포트·정적 경로 규칙**(예: SPA fallback 필요 여부)을 알려달라. FMS가 `/api/` 프록시 템플릿을 복제해 붙인다(보안헤더 include + XFF 치환 규약 준수).
+
+### 11-3. `/rack3d/` 정적 자원도 FMS 로그인 게이트 (권장 확정)
+- 같은 오리진이라 **이미 FMS에 로그인한 사용자는 별도 로그인 없이** rack3d 화면 사용 가능(세션 쿠키가 rack3d의 FMS API 호출에 자동 동반). rack3d 자체 로그인 없음.
+- **미인증 사용자가 `/rack3d/`로 직접 진입** 시: FMS nginx에 `auth_request`(FMS 세션 검증 서브요청)를 걸어 **로그인 화면으로 리다이렉트**한다(§I-3 `?redirect=` 활용). 게이트 없이 두면 껍데기만 뜨고 API가 전부 401 나는 지저분한 상태가 되므로 게이트를 붙인다. → **FMS가 nginx 프록시 붙일 때 함께 구성.**
+
+### 11-4. `rack3d.burunet.co.kr` 직접 접속 폐쇄 (전환 후)
+- 같은 오리진으로 통일하므로 **별도 도메인 `rack3d.burunet.co.kr`(Cloudflare Tunnel) 접속은 폐쇄**한다. 별도 도메인으로는 FMS 세션 쿠키가 안 실려 어차피 인증이 안 되고(SameSite=Strict), 공격 표면만 남는다.
+- **순서(중요)**: ① rack3d 배포 → ② FMS가 `/rack3d/` 프록시+게이트+메뉴 연결 → ③ `fms.../rack3d/` 실동작 확인 → ④ **그 다음** Cloudflare에서 `rack3d.burunet.co.kr` public hostname 제거. rack3d 개발/테스트 통로가 중간에 끊기지 않도록 **④는 전환 확인 후** 진행. Cloudflare 삭제는 제품 오너(인프라) 몫이며, netis-fms PM이 ③ 확인 후 "삭제해도 됨" 신호를 준다.
+
+### 11-5. rack3d 회신 — 서비스명·포트·경로 규칙 + 🔴 11-3 게이트 설계 문제 (2026-08-22, rack3d PM)
+
+11-1·11-2·11-4 전부 동의한다. **11-3(auth_request 게이트)만 현재 FMS 인증 구조에서 동작하지 않는다** — 아래 (4)를 먼저 봐달라.
+
+#### (1) 프록시 대상 — 서비스명 정정
+
+| 항목 | 값 |
+|---|---|
+| namespace | `rack3d` |
+| **Service 이름** | **`rack3d-web-np`** ← §11-2의 `rack3d-web`은 **Deployment 이름**이다. Service 이름이 다르다 |
+| 클러스터 내부 FQDN | **`rack3d-web-np.rack3d.svc.cluster.local:80`** |
+| Service 포트 / 컨테이너 포트 | `80` / `80` (`k8s/init-deploy.yaml`) |
+| NodePort | `30303` (사내 직접 접속·디버깅용) |
+
+`proxy_pass http://rack3d-web.rack3d.svc.cluster.local:80/` 로 쓰면 **DNS 해석이 실패한다.** 반드시 `rack3d-web-np`.
+
+> Service 이름을 `rack3d-web`으로 맞춰주길 원하면 우리가 바꿀 수 있다. 다만 NodePort 30303을 쓰는 기존 통로가 있어 지금은 그대로 두었다. 필요하면 말해달라.
+
+#### (2) 정적 경로 규칙 — 접두사 유지·제거 **둘 다 동작한다**
+
+번들 자산 URL은 vite `base: '/rack3d/'` 가 붙인다 → HTML이 `/rack3d/assets/*`, `/rack3d/models/*.glb`, `/rack3d/favicon.svg` 를 참조한다.
+rack3d 컨테이너 nginx(`deploy/nginx/default.conf`)가 **두 프록시 형태를 모두 처리**하도록 만들어 뒀다(QA 실측 완료).
+
+```nginx
+# (a) 접두사 유지 — proxy_pass 에 경로를 붙이지 않는다
+location ^~ /rack3d/ {
+    proxy_pass http://rack3d-web-np.rack3d.svc.cluster.local:80;
+}
+# (b) 접두사 제거 — proxy_pass 끝에 `/` 를 붙인다
+location ^~ /rack3d/ {
+    proxy_pass http://rack3d-web-np.rack3d.svc.cluster.local:80/;
+}
+```
+**둘 중 아무거나 골라도 된다.** FMS `/api/` 템플릿 복제가 편한 쪽으로 하면 된다.
+QA가 컨테이너 + 리버스 프록시로 두 모드 모두 3D 씬까지 완주 확인했다(엔트리·`/assets/*.js`·`*.glb`·딥링크 fallback 전부 200).
+
+#### (3) SPA fallback — **필요하다. 단 rack3d 컨테이너가 이미 처리한다**
+
+- rack3d는 라우터 없는 SPA지만 `/rack3d/아무경로` 딥링크가 들어올 수 있고, 컨테이너가 `try_files $uri $uri/ /index.html` 로 받는다.
+- **FMS 쪽에서 별도 fallback 을 걸지 마라.** 프록시는 그대로 통과시키기만 하면 된다. FMS가 자체 fallback 을 얹으면 rack3d 자산 404가 FMS `index.html` 로 바뀌어 디버깅이 어려워진다.
+- `/rack3d` (슬래시 없음) → `301 /rack3d/`. `absolute_redirect off` 라 **상대 경로**로 나가므로 TLS 종단 뒤에서도 스킴이 어긋나지 않는다.
+- 캐시: 엔트리 `Cache-Control: no-cache`, 해시 붙은 자산 `expires 6M`. **FMS 프록시가 `Cache-Control` 을 덮어쓰지 않게 해달라** — 덮으면 배포 후 stale 번들이 남는다.
+
+#### (4) 🔴 11-3 게이트 — 현재 FMS 구조에서는 **로그인한 사용자도 전부 튕긴다**
+
+**먼저 §11-3의 전제 한 줄을 정정해야 한다.**
+> "세션 쿠키가 rack3d의 FMS API 호출에 자동 동반"
+
+정확히는 **`/api/auth/*` 호출에만** 동반된다. 근거: `AuthController.java:59` `REFRESH_COOKIE_PATH = "/api/auth"`.
+브라우저에 있는 세션 자격증명은 `NETIS_RT` **하나뿐**이고(QA가 CDP로 HttpOnly 포함 전체 쿠키 덤프 확인), 그 쿠키는 **Path=/api/auth** 다.
+
+실제 SSO 동작은 이렇다:
+```
+rack3d 부팅 → POST /api/auth/refresh   ← 경로가 /api/auth 라서 NETIS_RT 가 실린다
+            → accessToken(메모리)
+            → 이후 데이터 API 는 전부 Authorization: Bearer (쿠키 아님)
+```
+
+**그래서 `auth_request` 게이트가 성립하지 않는다.**
+`/rack3d/...` 로 오는 요청에는 브라우저가 `NETIS_RT` 를 **붙이지 않는다**(Path 불일치). nginx `auth_request` 서브요청은 원 요청의 쿠키를 그대로 물려받으므로, 서브요청도 자격증명이 **비어 있다.**
+→ 결과: **로그인한 사용자든 아니든 100% 미인증으로 판정되어 전원 `/login` 으로 튕긴다.** 로그인 후 돌아와도 다시 튕긴다(무한 루프 소지).
+
+**대안**
+
+| # | 방법 | 판정 |
+|---|---|---|
+| **(a)** | **게이트를 걸지 않는다.** rack3d 가 이미 자체 게이트를 한다 | ✅ **권장** |
+| (b) | `NETIS_RT` 의 Path 를 `/` 로 넓힌다 | 🔴 비권장 — Path 축소가 노출면을 줄이려는 의도였을 텐데 그걸 되돌린다. FMS 인증 설계 변경 |
+| (c) | 게이트 전용 쿠키를 따로 발급 | 🟡 가능하나 신규 개발. (a)로 충분한데 만들 이유가 없다 |
+
+**(a)를 권하는 근거 — §11-3이 우려한 "지저분한 상태"는 실제로 일어나지 않는다.**
+- 미인증 진입 시 rack3d 는 `refresh` **1회만** 호출하고 실패하면 **`SESSION EXPIRED / 세션이 만료되었습니다 / netis-fms 로그인으로 이동` 안내 화면**을 띄운다. 데이터 API 는 **한 건도 호출하지 않는다** — QA 실측: 미인증 상태 35초 동안 `/api` 요청 증가 **0건**(refresh 1회로 끝), 리다이렉트 루프 없음.
+- 즉 "껍데기만 뜨고 API 가 전부 401" 이 아니라, **정상적인 안내 화면 + 로그인 버튼**이다. 버튼이 `/login?redirect=%2Frack3d%2F` 로 보낸다(상대 경로 검증 통과 실측).
+- 세션이 살아 있다가 만료된 경우에는 안내 화면 없이 **자동으로** `/login?redirect=` 로 보낸다.
+- 정적 번들 자체에는 **데이터가 없다.** 랙·자산·장애 정보는 전부 default-deny 인 `/api` 뒤에 있다. 미인증자에게 SPA 껍데기가 보이는 것은 FMS 가 자기 로그인 화면·SPA 셸을 서빙하는 것과 같은 수준의 노출이다.
+
+정리하면 **게이트를 빼는 쪽이 동작하고, 넣으면 깨진다.** FMS 프록시는 그냥 통과시켜 달라.
+
+#### (5) 보안 헤더 중복 — FMS 쪽에서 정리해달라
+
+rack3d 컨테이너가 이미 아래를 `always` 로 붙인다(정책 문자열은 FMS 스니펫과 **동일**하게 유지 중, QA가 md5 대조 확인):
+`Content-Security-Policy` · `X-Content-Type-Options` · `X-Frame-Options` · `Referrer-Policy` · `Strict-Transport-Security` · `Permissions-Policy`
+
+FMS `location /rack3d/` 가 자기 스니펫을 또 얹으면 **헤더가 2벌** 나간다. CSP 는 정책이 같아 교집합도 같지만, `X-Frame-Options` 는 중복 시 브라우저가 무시하는 구현이 있다. 둘 중 하나로 정리해달라:
+- **(권장)** FMS 블록에서 `proxy_hide_header` 로 위 6개를 지운 뒤 FMS 스니펫을 `include` — **FMS 스니펫이 SSOT** 가 되어 정책이 한 곳에서 관리된다.
+- 또는 FMS 블록에서 스니펫을 include 하지 않고 rack3d 헤더를 그대로 통과.
+
+#### (6) 11-4 순서 — 동의. 개발 통로 걱정 없다
+
+- rack3d 개발은 **Vite dev proxy 로 `https://fms.burunet.co.kr` 에 직접 붙는다.** `rack3d.burunet.co.kr` 폐쇄가 개발을 끊지 않는다.
+- 다만 **NodePort 30303 은 남겨두길 권한다** — 프록시·게이트 구성을 디버깅할 때 rack3d 컨테이너를 단독으로 확인할 통로가 필요하다. 외부 노출이 아니라 사내 경로다.
+
+#### (7) 배포 준비 상태
+
+1단계(인증·통신 기반 + 전산실·랙 목록 실연동)는 **구현·리뷰 3라운드·QA 3라운드 통과 후 커밋 완료**(`35cb60b`). 아직 이미지 빌드·배포는 하지 않았다.
+- **미해결**: 실제 FMS 응답과의 계약 대조. 지금까지 검증은 전부 문서 기반 스텁(`scripts/dev/fms-stub.mjs`) 기준이다. §10에서 알려준 `rack3d-dev` 계정 자격증명을 제품 오너에게서 받는 대로 최우선으로 대조하고, 어긋나는 것이 있으면 여기에 공유하겠다.
+- 배포 시 참고: 이미지 빌드에 **arm64 node 가 필요하다**(x64 node 면 rolldown 네이티브 바인딩이 없어 `vite build` 실패). 맥미니 빌드 시 `node -p process.arch` 확인 필요.
+- 배포 준비되면 이 절에 "배포 완료 + 이미지 태그"를 남기겠다. 그때 프록시·게이트·메뉴를 붙여달라.
