@@ -974,3 +974,50 @@ FMS 가 (권장) 쪽을 택하기 어렵다면 말해달라 — rack3d 쪽 한 �
 
 #### 검증하지 못한 것
 MFA 걸린 일반 계정의 SSO 흐름(`rack3d 개발` 은 `mfaRequired:false`) · 다른 스코프 계정 · 브라우저 1종(headless Chrome/SwiftShader, 실 GPU·타 브라우저 없음) · 장시간 운영(최장 95초 연속 관측, 토큰 선제 갱신 TTL 900초 실경계 미확인) · 구도메인 `rack3d.burunet.co.kr` 현재 상태 · 쓰기 경로(운영이라 미실시).
+
+### 11-25. netis-fms PM — 로그인 복귀 404 수정 배포 + 폐쇄 신호 (2026-08-22)
+
+§11-24 검증 3개 PASS 확인·감사. 보고한 **로그인 복귀 404**(별건)를 FMS 쪽 권장안대로 고쳐 배포했다.
+- 원인: LoginPage가 로그인 후 `navigate(fromPath)`(react-router)로 이동 — `/rack3d/`는 SPA 라우트가 없어 404, nginx 프록시 미경유.
+- 수정(프론트 `main-0b5df7b` 배포, 무중단·재시작0): `isServerRoutedPath('/rack3d')`면 `window.location.assign(fromPath)`으로 **전체 페이지 로드**(nginx 경유), 아니면 기존 navigate. `fromPath`는 `isSafeInternalPath` 검증값이라 오픈 리다이렉트 안전. 접두사 방식이라 앞으로 붙는 하위 앱도 접두사만 추가하면 동일 이롭다(권장안 채택 — rack3d의 APPEND_REDIRECT_PARAM 되돌릴 필요 없음). 테스트 +1, 빌드·린트·테스트 15/15 그린.
+- ▶ **rack3d 재확인 부탁(비차단)**: 미인증 진입→안내 버튼→로그인 제출→`/rack3d/` 로 **404 없이** 진입되는지(이제 full load라 GET /rack3d/ 문서 요청이 뜨고 프록시를 탄다). 어긋나면 알려달라.
+
+**CSP 위반 1건(cloudflareinsights beacon) — 접수, FMS 판단 = 현행 유지(차단).** Cloudflare Web Analytics가 엣지에서 자동 주입하는 외부 스크립트이고 FMS 본체에도 동일하게 뜬다. FMS CSP(`script-src 'self'`)가 이를 **정상 차단**하는 것이라 기능 영향 없다. Web Analytics를 안 쓰므로 CSP에 호스트를 추가하지 않고 **차단 유지**한다(최소 노출 원칙). 필요해지면 Cloudflare 대시보드에서 끄거나 그 host만 CSP에 추가.
+
+**폐쇄 신호**: SSO·3D 렌더·미인증 안내 3개 PASS + 404 수정 배포 완료 → 제품 오너에게 `rack3d.burunet.co.kr`(Cloudflare) 폐쇄를 신호했다(§11-4 순서 충족). 폐쇄는 제품 오너/인프라 실행.
+
+### 11-26. rack3d 재확인 — 로그인 복귀 404 해소 확인 (2026-08-22, rack3d PM)
+
+§11-25 수정(프론트 `main-0b5df7b`)을 쿠키 없는 브라우저로 **2회** 확인했다. **PASS — F5 없이 `/rack3d/` 로 바로 진입한다.**
+
+**핵심: `GET /rack3d/` 문서 요청이 실제로 뜬다.** 우리가 원인으로 특정했던 지점(문서 요청 부재)이 해소됐다.
+```
+REQ(Document) GET https://fms.burunet.co.kr/rack3d/
+RES(Document) 200
+NAV           https://fms.burunet.co.kr/rack3d/     ← 리다이렉트 체인 없음
+```
+로그인 제출 이후 응답 전부 200, non-200 0건:
+`POST /api/auth/login` → `GET /rack3d/`(문서) → 자산 3건 → `POST /api/auth/refresh` → `GET /api/auth/me` → `GET /api/locations/sidebar`.
+이어서 ZONE 10 진입 시 `racks` 200 · `u-maps` 200, 상단바 `2 RACKS | 9 IN RACKS | 8 MOUNTED | LIVE`, canvas 1600x823 렌더.
+404 문구(`구현 예정`/`페이지를 찾을 수 없음`) 매칭 **false**. 리다이렉트 루프 없음. `securitypolicyviolation` 은 알려진 `cloudflareinsights beacon` 1건뿐, 그 외 0. 콘솔 예외·`unhandledrejection` 0.
+
+**`APPEND_REDIRECT_PARAM` 은 되돌리지 않는다** — 현재 `true` 유지가 맞다. 접두사 방식으로 FMS 가 처리하므로 rack3d 쪽 변경 불요.
+
+**정직하게 남기는 것** — 1회차 콘솔에 `Failed to load resource: 404` 가 1건 찍혔는데 어떤 리소스인지 특정하지 못했다(카운터 리셋 이후라 응답 목록에 없었다). **2·3회차에서 재현되지 않았고** rack3d 진입 경로 응답에는 non-200 이 없다. 일회성으로 보이나 **원인 미상**이다.
+
+**검증 못 한 것** — MFA 걸린 계정에서 OTP 단계를 거친 뒤에도 `redirect` 복귀가 유지되는지 · 오픈 리다이렉트 실제 시도(FMS 가 `isSafeInternalPath` 로 막았다고 보고했고 운영이라 시도하지 않았다) · 브라우저 1종 · `?redirect=` 없이 `/login` 직접 진입 시 기본 착지점.
+
+---
+
+## 12-A. 연동 마무리 요약 (2026-08-22)
+
+rack3d ↔ netis-fms 연동이 **운영에 올라가 동작한다.** 진입점: FMS 상단 `3D 관제` → `https://fms.burunet.co.kr/rack3d/`.
+
+| 단계 | 내용 | 상태 |
+|---|---|---|
+| 1 | 인증·통신 기반 + 전산실·랙 목록 실연동 | 배포됨 |
+| 2 | 랙 내부 장비(u맵) · 토큰 선제 갱신 · `ServerStatus` 삭제 · 라벨 3계층 · 가짜 온도 시계열 제거 | 배포됨 |
+| 3 | ZONE 배치 u맵 전환(36요청 → 1) · 폴링 정책 분리(구조는 진입 시 1회) | 배포됨 |
+| 배포 | rack3d `main-1ef8b9d` / FMS 프론트 `main-368abcf`(프록시·메뉴) → `main-0b5df7b`(복귀 수정) | 완료 |
+
+**남은 것** — `rack3d.burunet.co.kr` 폐쇄(제품 오너·인프라 실행) · E17 이미지 텍스처(선행 조건 전부 해소, `?v=<sha>` 캐시 규약을 FMS 와 동시 적용) · E18 좌표 이관(PUT 배포돼 있음) · 확정 대시보드 재구현(`series/zone` 연동 시 echarts 복원).
