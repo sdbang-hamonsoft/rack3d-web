@@ -31,6 +31,14 @@ const SCENARIO = process.env.SCENARIO ?? 'ok'
 // umap-partial A-01만 응답에서 누락 → "netis-fms가 이 랙의 U 배치를 반환하지 않았습니다" 확인
 // category-missing  A-02 categoryCounts 필드 부재(assetCount 3) → "랙 내 자산"이 0이 아니라 `—`,
 //                   "U 미배정 -3대" 같은 음수가 안 나오는지 확인
+// layout-unset      layout 이 grid:null + objects:[] → "3D 배치가 설정되지 않았습니다" 안내 + 3D 비움
+//                   (실측 8 ZONE 중 6개가 이 상태다)
+// layout-fail       layout 500 → 씬 안내 + 상단 LIVE·구조 미갱신 확인
+// layout-hang       layout 무응답 → 20초 타임아웃 뒤 실패 전환 확인
+// layout-partial    A-01·A-03 만 배치 → "랙 3대가 3D 배치에 없습니다" 안내 + 목록·경보엔 남는지 확인
+// layout-orphan     랙 목록에 없는 RACK 오브젝트(rack:null 1건 + 미등록 locationId 1건)
+//                   → 랙이 아니라 색 박스로 그려지는지 확인 (실측 ZONE 19 재현)
+// layout-tile1000   tileMm 1000 · 10x6 그리드 → 상수 하드코딩이 남아 있지 않은지 확인
 
 /** 액세스 토큰 수명(초). 선제 갱신 타이머를 짧게 관측할 때만 줄인다(실측 기본 900). */
 const TOKEN_TTL = Number(process.env.TOKEN_TTL ?? 900)
@@ -119,6 +127,52 @@ for (let i = 0; i < EXTRA_RACKS; i += 1) {
   ]
 }
 
+/**
+ * ZONE 3D 배치 픽스처 — `GET /api/layouts/zones/{zoneId}/layout` (E18).
+ *
+ * **좌표계**: 원점 (0,0) = 좌상단, x = 열(오른쪽 = EAST), z = 행(아래 = SOUTH) → NORTH = z 감소.
+ * `dir` 은 오브젝트 **정면(FRONT)** 이 향하는 방위다(§11-30). 랙 4대에 4방위를 한 번씩 넣어
+ * 회전 매핑이 뒤집혔는지 눈으로 바로 갈리게 했다 — dir=NORTH 랙은 정면이 그리드 위쪽을 봐야 한다.
+ *
+ * 비-RACK 은 팔레트 12종 중 6종을 깔아 색·레이블·높이가 종류별로 갈리는지 본다.
+ * `UNKNOWN_KIND` 는 **FMS 가 나중에 type 을 늘린 상황**의 재현이다 — 회색 박스 + type 레이블로
+ * 안전하게 넘어가야 하고, 절대 씬이 깨지면 안 된다.
+ * `label: ''` 인 건은 표시명이 `type` 으로 대체되는지 본다.
+ */
+const layoutObject = (o) => ({ dir: 'NORTH', label: '', rack: null, asset: null, ...o })
+
+const layoutObjects = [
+  layoutObject({ id: 1, type: 'RACK', x: 2, z: 2, dir: 'NORTH', label: 'A-01', rack: { locationId: 11, name: 'A-01', code: 'A01', rackUnits: 42 } }),
+  layoutObject({ id: 2, type: 'RACK', x: 4, z: 2, dir: 'EAST', label: 'A-02', rack: { locationId: 12, name: 'A-02', code: null, rackUnits: 42 } }),
+  layoutObject({ id: 3, type: 'RACK', x: 6, z: 2, dir: 'SOUTH', label: 'A-03', rack: { locationId: 13, name: 'A-03', code: null, rackUnits: 20 } }),
+  // 랙 크기 미설정(rackUnits: null) — 박스/프레임 높이를 지어내되 **화면 수치로는 새지 않아야** 한다.
+  layoutObject({ id: 4, type: 'RACK', x: 8, z: 2, dir: 'WEST', label: 'A-04', rack: { locationId: 14, name: 'A-04', code: null, rackUnits: null } }),
+  layoutObject({ id: 5, type: 'RACK', x: 2, z: 5, dir: 'SOUTH', label: 'A-05', rack: { locationId: 15, name: 'A-05', code: null, rackUnits: 42 } }),
+  layoutObject({ id: 6, type: 'CRAC', x: 10, z: 1, dir: 'WEST', label: '항온항습기 #1' }),
+  layoutObject({ id: 7, type: 'UPS', x: 10, z: 3, dir: 'WEST', label: 'UPS' }),
+  layoutObject({ id: 8, type: 'POWER', x: 10, z: 5, dir: 'WEST', label: '' }),           // label 빈 문자열 → 'POWER'
+  layoutObject({ id: 9, type: 'SENSOR', x: 5, z: 6, dir: 'NORTH', label: '온습도 센서' }),
+  layoutObject({ id: 10, type: 'DOOR', x: 0, z: 7, dir: 'EAST', label: '방화문' }),
+  layoutObject({ id: 11, type: 'UNKNOWN_KIND', x: 7, z: 6, dir: 'NORTH', label: '' }),   // 미지원 type → 회색 박스 + 'UNKNOWN_KIND'
+]
+
+/**
+ * `EXTRA_RACKS` 합성 랙도 배치에 올린다 — 안 올리면 전부 "미배치"가 되어
+ * 3D 렌더 비용·폴링 중 카메라 조작 재현이 안 된다. 기본 8행 아래에 12칸씩 새 행으로 깐다.
+ */
+const EXTRA_ROWS = Math.ceil(EXTRA_RACKS / 12)
+racks.filter((r) => r.locationId >= 200).forEach((r, i) => {
+  layoutObjects.push(layoutObject({
+    id: 500 + i,
+    type: 'RACK',
+    x: i % 12,
+    z: 8 + Math.floor(i / 12),
+    dir: ['NORTH', 'EAST', 'SOUTH', 'WEST'][i % 4],
+    label: r.name,
+    rack: { locationId: r.locationId, name: r.name, code: r.code, rackUnits: r.rackUnits },
+  }))
+})
+
 const zone = {
   id: 101, layer: 'ZONE', name: '서울 메인 전산실', code: 'SEL-01', sortOrder: 1, totalAssetCount: 15,
   children: racks.map((r, i) => ({ id: r.locationId, layer: 'RACK', name: r.name, code: r.code, sortOrder: i, children: [] })),
@@ -193,6 +247,43 @@ createServer((req, res) => {
   }
   // 랙 없는 ZONE은 200 [], 없는 ZONE은 404 (실 FMS 실측과 동일)
   if (/^\/api\/zones\/\d+\/u-maps$/.test(req.url ?? '')) {
+    return json(404, { code: 'NOT_FOUND', message: '없음' })
+  }
+  // ZONE 3D 배치(E18). 미설정 ZONE 은 200 { grid: null, objects: [] }, 없는 id 는 404 — 실측과 동일.
+  if (req.url === '/api/layouts/zones/101/layout') {
+    if (SCENARIO === 'layout-fail') return json(500, { code: 'INTERNAL_ERROR', message: '실패' })
+    if (SCENARIO === 'layout-hang') return // 응답하지 않는다 — 20초 타임아웃 확인용
+    const head = { zone: { id: 101, name: zone.name, code: zone.code } }
+    if (SCENARIO === 'layout-unset') return json(200, { ...head, grid: null, objects: [] })
+    if (SCENARIO === 'layout-tile1000') {
+      return json(200, {
+        ...head,
+        grid: { cols: 10, rows: 6, tileMm: 1000, ceilingMm: 4200 },
+        objects: layoutObjects.filter((o) => o.x < 10 && o.z < 6),
+      })
+    }
+    const grid = { cols: 12, rows: 8 + EXTRA_ROWS, tileMm: 600, ceilingMm: 2800 }
+    if (SCENARIO === 'layout-partial') {
+      // A-02·A-04·A-05 는 배치 없음 → 3D 에 안 그려지되 목록·검색·경보에는 남아야 한다.
+      const keep = new Set([11, 13])
+      return json(200, { ...head, grid, objects: layoutObjects.filter((o) => o.type !== 'RACK' || keep.has(o.rack?.locationId)) })
+    }
+    if (SCENARIO === 'layout-orphan') {
+      return json(200, {
+        ...head,
+        grid,
+        objects: [
+          ...layoutObjects,
+          // 실측 ZONE 19 재현 — type RACK 인데 rack 참조가 없다.
+          layoutObject({ id: 90, type: 'RACK', x: 1, z: 0, dir: 'SOUTH', label: '랙-01' }),
+          // 랙 목록에 없는 locationId — 랙이 아니라 박스로 그려져야 한다.
+          layoutObject({ id: 91, type: 'RACK', x: 3, z: 0, dir: 'NORTH', label: '유령 랙', rack: { locationId: 9999, name: '유령 랙', code: null, rackUnits: 42 } }),
+        ],
+      })
+    }
+    return json(200, { ...head, grid, objects: layoutObjects })
+  }
+  if (/^\/api\/layouts\/zones\/\d+\/layout$/.test(req.url ?? '')) {
     return json(404, { code: 'NOT_FOUND', message: '없음' })
   }
   return json(404, { code: 'NOT_FOUND', message: '없음' })

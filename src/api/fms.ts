@@ -5,7 +5,7 @@
  */
 
 import { ApiError, api, NETWORK_ERROR_STATUS } from './client'
-import type { MeResponse, RackSummary, RackUMap, SidebarNode, SidebarResponse } from './types'
+import type { MeResponse, RackSummary, RackUMap, SidebarNode, SidebarResponse, ZoneLayout } from './types'
 
 /** `GET /api/auth/me` — 사용자·권한 요약(인증만 필요). */
 export function fetchMe(): Promise<MeResponse> {
@@ -49,6 +49,29 @@ export function fetchZoneUMaps(zoneId: number): Promise<RackUMap[]> {
     return Promise.reject(new ApiError(NETWORK_ERROR_STATUS, 'INVALID_ZONE_ID'))
   }
   return api.get<RackUMap[]>(`/zones/${zoneId}/u-maps`)
+}
+
+/**
+ * `GET /api/layouts/zones/{zoneId}/layout` — ZONE 3D 배치도 (ASSET READ, E18).
+ *
+ * 3D 좌표의 **SSOT 는 여기다**. 예전에는 좌표를 `localStorage`(`rack3d-layout:<id>`)에 두고
+ * 없으면 자동 배치로 채웠는데, 그래서 **FMS 레이아웃 설정에서 랙을 옮겨도 3D 가 안 바뀌었다**
+ * (제품 오너 보고 2026-08-22 — 버그가 아니라 미구현이었다).
+ *
+ * ⚠️ **랙 집합의 SSOT 는 여전히 {@link fetchZoneRacks} 다.** 여기 `objects[].rack` 은 좌표를
+ * 붙이기 위한 참조일 뿐이고, 양쪽이 어긋날 수 있다(실측 ZONE 19: 랙 목록 0건인데 배치에는
+ * `type RACK` 오브젝트 1건이 `rack: null` 로 있다). 페어링은 `locationId` **값**으로 한다.
+ *
+ * 미설정 ZONE 은 `200 { grid: null, objects: [] }`, 없는·ZONE 이 아닌·스코프 밖 id 는 `404`다
+ * (실측: BUILDING id 1 → 404. u맵의 `200 []` 과 동작이 다르다).
+ *
+ * C5 신뢰 경계: `zoneId`는 **sidebar 응답이 준 id만** 넘긴다.
+ */
+export function fetchZoneLayout(zoneId: number): Promise<ZoneLayout> {
+  if (!Number.isInteger(zoneId) || zoneId <= 0) {
+    return Promise.reject(new ApiError(NETWORK_ERROR_STATUS, 'INVALID_ZONE_ID'))
+  }
+  return api.get<ZoneLayout>(`/layouts/zones/${zoneId}/layout`)
 }
 
 // ── 사이드바 트리 → 전산실(ZONE) 목록 ────────────────────────────────────────

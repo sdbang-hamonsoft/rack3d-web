@@ -27,6 +27,12 @@ VITE_FMS_ORIGIN=http://localhost:8777 npm run dev              # rack3d를 스�
 | `umap-empty` | ZONE u맵 `200 []` — 랙은 있는데 항목이 없다. "장비 0대"로 단정하지 않는지 확인 |
 | `umap-partial` | A-01만 응답에서 누락 — "netis-fms가 이 랙의 U 배치를 반환하지 않았습니다" 확인 |
 | `category-missing` | A-02 `categoryCounts` 필드 부재(`assetCount` 3) — "랙 내 자산"이 `0`이 아니라 `—`, "U 미배정 −3대" 같은 음수가 안 나오는지 확인 |
+| `layout-unset` | 배치 `grid: null` + `objects: []` — **"3D 배치가 설정되지 않았습니다" 안내 + 3D 비움**. 실측 8 ZONE 중 6개가 이 상태라 가장 자주 뜨는 화면이다 |
+| `layout-fail` | 배치 500 — 씬 안내 + 상단 `LIVE · 구조 미갱신` 확인 |
+| `layout-hang` | 배치 무응답 — 20초 타임아웃 뒤 실패 전환 확인 |
+| `layout-partial` | A-01·A-03 만 배치 — "랙 3대가 3D 배치에 없습니다" 안내. **목록·검색·경보에는 남아야 한다**(경보 랙이 조용히 사라지면 안 된다) |
+| `layout-orphan` | 랙 목록에 없는 RACK 오브젝트(`rack: null` 1건 + 미등록 `locationId` 1건) — 랙이 아니라 색 박스로 그려지는지 확인(실측 ZONE 19 재현) |
+| `layout-tile1000` | `tileMm 1000` · 10×6 그리드 — 그리드 상수 하드코딩이 남아 있지 않은지 확인 |
 
 `EXTRA_RACKS=<n>`으로 합성 랙을 덧붙인다(예: `EXTRA_RACKS=31` → 총 36대).
 **랙 수가 많을 때만 드러나는 것**(3D 렌더 비용, 폴링 중 카메라 조작, 배치 응답 크기)을
@@ -58,6 +64,19 @@ VITE_FMS_ORIGIN=http://localhost:8777 npm run dev              # rack3d를 스�
 | A-03 | **0대(수신 완료)** | "U가 배정된 장비가 없습니다" — "불러오는 중"이 아니다 |
 | A-04 | 2대 / 5U인데 **랙 크기 미설정** | **U 배치도를 그리지 않는다**(폴백 42U 누출 금지). MAX BLOCK `—` |
 | A-05 | 1대, `lifecycleStatus: REPAIR` | 생애주기는 중립 배지로 원값 표기(건강 상태 아님) |
+
+### ZONE 3D 배치 픽스처 (`GET /api/layouts/zones/{zoneId}/layout` — E18)
+
+좌표계는 **원점 (0,0) = 좌상단, x = 열(오른쪽 = EAST), z = 행(아래 = SOUTH) → NORTH = z 감소**다.
+`dir` 은 오브젝트 **정면(FRONT)** 이 향하는 방위(§11-30).
+
+| 오브젝트 | 확인 대상 |
+|---|---|
+| RACK A-01~A-04 에 `dir` 4방위를 한 번씩 | **회전 매핑이 뒤집혔는지 눈으로 갈린다** — `dir: NORTH` 랙은 정면이 그리드 **위쪽**을 봐야 한다 |
+| A-03 `rackUnits 20` / A-04 `rackUnits null` | 랙 크기가 화면 수치로 샐 때 드러난다(U 배치도·RACK SIZE 는 FMS 원값, 미설정은 `—`) |
+| CRAC·UPS·POWER·SENSOR·DOOR | 종류별 색(FMS 2D 에디터 팔레트)·높이·레이블이 갈리는지 |
+| `POWER`·`UNKNOWN_KIND` 는 `label: ''` | 표시명이 **`type` 으로 대체**되는지(지어내지 않는다) |
+| `UNKNOWN_KIND` | **FMS 가 나중에 type 을 늘린 상황** — 회색 박스 + type 레이블로 넘어가야 하고 씬이 깨지면 안 된다 |
 
 ### ⚠️ 한계
 

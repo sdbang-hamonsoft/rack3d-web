@@ -1,4 +1,11 @@
-import type { RackAsset, RackSummary, RackUMap } from './api/types'
+import type {
+  LayoutDirection,
+  LayoutObject,
+  RackAsset,
+  RackSummary,
+  RackUMap,
+  ZoneLayout,
+} from './api/types'
 
 /** 번들에 들어 있는 3D 장비 모델 3종. **형상 근사용이며 표시 문구의 출처가 아니다.** */
 export type ServerModel = 'dell-poweredge-r760' | 'hpe-proliant-dl360-gen11' | 'cisco-ucs-c240-m7'
@@ -56,9 +63,14 @@ export type RackData = {
    * 3D 랙 GLB는 지금도 42U 형상 하나뿐이지만 그건 **형상**이지 수치가 아니다.
    */
   rackUnits: number | null
-  tileX: number
-  tileZ: number
-  rotation: number
+  /**
+   * netis-fms ZONE 배치도의 좌표·방위(E18).
+   *
+   * **`null` = 이 랙이 FMS 레이아웃에 배치되어 있지 않다.** 그때는 3D 에 그리지 않는다 —
+   * 임의 위치에 놓으면 실제 배치로 오인된다. 다만 랙 자체를 목록·검색·경보에서 빼지는
+   * 않는다(경보 중인 랙이 화면에서 사라지는 것이 더 나쁘다). 호출부가 "미배치 N대"를 밝힌다.
+   */
+  placement: ScenePlacement | null
   servers: ServerData[]
   /**
    * u맵 응답을 **받았는가**. false면 "장비 0대"가 아니라 **모르는 상태**다 —
@@ -139,186 +151,282 @@ export function toServerList(uMap: RackUMap): ServerData[] {
     .sort((a, b) => b.startU - a.startU)
 }
 
-export const GRID_COLUMNS = 18
-export const GRID_ROWS = 14
-export const LAYOUT_STORAGE_VERSION = 1
-
-/**
- * 저장되는 랙 1건 — **좌표만 담는다.**
- *
- * 예전 포맷은 label·totalUnits·servers도 함께 기록했다. 그런데 그 값들은 전부
- * netis-fms가 SSOT이고(D1) 읽을 때 무시된다. 특히 `totalUnits`는 크기 미설정 랙에
- * 폴백 42가 들어가 **"지어낸 값이 파일에 남는" 유일한 경로**였다 —
- * 지금은 표시되지 않지만 E18 연동 때 이 파일을 신뢰하는 코드가 생기면 그대로 사고가 된다.
- * 애초에 기록하지 않는다.
- *
- * 구버전 파일도 그대로 읽힌다(읽는 필드가 부분집합이라 남는 키는 무시된다).
- */
-export type StoredRack = {
-  id: string
-  gridX: number
-  gridZ: number
-  rotationDegrees: number
-}
-
-export type StoredRackLayout = {
-  version: number
-  updatedAt: string
-  racks: StoredRack[]
-}
-
-const layoutStorageKey = (dataCenterId: string) => `rack3d-layout:${dataCenterId}`
-
-export function normalizeDegrees(degrees: number) {
-  return ((Math.round(degrees) % 360) + 360) % 360
-}
-
-export function degreesToRadians(degrees: number) {
-  return normalizeDegrees(degrees) * Math.PI / 180
-}
-
-export function radiansToDegrees(radians: number) {
-  return normalizeDegrees(radians / Math.PI * 180)
-}
-
-// ── netis-fms 랙 목록 → 3D 씬 랙 (S1) ───────────────────────────────────────
+// ── netis-fms ZONE 배치(E18) → 3D 씬 ────────────────────────────────────────
 //
-// 랙의 **존재·이름·크기는 netis-fms가 SSOT**다(D1). rack3d가 로컬에 보관하는 것은
-// 3D 배치 좌표뿐이며, 이것도 FMS E18(zone layout) 완료 시 대체된다(S4).
+// 3D 좌표의 SSOT 는 netis-fms `GET /api/layouts/zones/{id}/layout` 이다.
+//
+// ⚠️ **예전 코드가 여기 있었다**: `rack3d-layout:<zoneId>` localStorage 저장·읽기
+// (`StoredRack`·`loadRackPlacements`·`saveRacksForDataCenter`)와 빈 타일 자동 배치
+// (`createTileAllocator`·`autoArrangeRacks`), 그리고 `GRID_COLUMNS 18`·`GRID_ROWS 14`
+// 상수. **되살리지 말 것** — 좌표 편집 지점이 두 곳이면 어느 쪽이 정답인지 흐려지고,
+// 자동 배치는 "FMS 가 SSOT"라는 전제와 정면으로 모순된다(E18 ①·⑤ 확정).
+// 배치가 없는 ZONE 은 **그리지 않고 안내한다**(실측 8 ZONE 중 6개가 미설정이다).
 
-
-/** 씬/배치 저장에서 랙을 식별하는 키 — FMS `locations.id`에 고정한다. */
+/** 씬·배치 페어링에서 랙을 식별하는 키 — FMS `locations.id`에 고정한다. */
 export function rackElementId(locationId: number): string {
   return `fms-rack-${locationId}`
 }
 
-export type RackPlacement = {
-  gridX: number
-  gridZ: number
-  rotationDegrees: number
-}
+/** 1U 높이(m). 랙 프레임·장비 배치가 공유하는 물리 상수(19인치 랙 규격 44.45mm). */
+export const RACK_UNIT_HEIGHT_M = 0.04445
+/** 랙 바닥에서 U01 하단까지(m). 3D 랙 GLB 실측값. */
+export const RACK_BASE_HEIGHT_M = 0.06655
 
 /**
- * 저장된 배치에서 **좌표만** 읽는다.
+ * ZONE 배치 그리드. **값은 전부 FMS 응답에서 온다**(`grid.cols/rows/tileMm`).
  *
- * 저장 파일에는 라벨·서버 목록도 함께 들어 있지만(구 포맷 호환) 그것들은 읽지 않는다 —
- * FMS가 SSOT인 값을 로컬 사본으로 되살리면 실제와 어긋난 옛 데이터가 화면에 남는다.
+ * `ceilingMm`(2800·3200 실측)은 **1차에 3D 로 반영하지 않는다.** 천장 면을 그리면 이 화면의
+ * 기본 시점인 부감(俯瞰)에서 씬 전체가 가려지고, 카메라 Y 상한을 천장으로 묶으면 전체 보기가
+ * 불가능해진다 — 즉 지금 쓸 수 있는 반영 방법이 둘 다 화면을 나쁘게 만든다. 값 자체는 계약에
+ * 남겨 두었으므로(`LayoutGrid.ceilingMm`) 나중에 실내 시점을 도입할 때 추가로 쓰면 된다.
  */
-export function loadRackPlacements(dataCenterId: string): Map<string, RackPlacement> {
-  const placements = new Map<string, RackPlacement>()
-  try {
-    const raw = window.localStorage.getItem(layoutStorageKey(dataCenterId))
-    if (!raw) return placements
-    const parsed = JSON.parse(raw) as StoredRackLayout
-    if (parsed?.version !== LAYOUT_STORAGE_VERSION || !Array.isArray(parsed.racks)) return placements
-    parsed.racks.forEach((rack) => {
-      if (typeof rack?.id !== 'string') return
-      placements.set(rack.id, {
-        gridX: rack.gridX,
-        gridZ: rack.gridZ,
-        rotationDegrees: rack.rotationDegrees,
-      })
-    })
-  } catch {
-    // 저장값이 깨졌으면 배치 없음으로 본다 — 아래 자동 배치가 채운다.
-  }
-  return placements
+export type SceneGrid = {
+  cols: number
+  rows: number
+  /** 타일 한 변(m) — `tileMm / 1000`. */
+  tileSize: number
 }
 
-/** 이미 점유된 타일을 피해 빈 타일을 순서대로 내주는 커서. */
-function createTileAllocator(occupied: Set<string>) {
-  let cursor = 0
-  return (): { tileX: number; tileZ: number } => {
-    while (cursor < GRID_COLUMNS * GRID_ROWS) {
-      const tileX = cursor % GRID_COLUMNS
-      const tileZ = Math.floor(cursor / GRID_COLUMNS)
-      cursor += 1
-      if (!occupied.has(`${tileX}:${tileZ}`)) {
-        occupied.add(`${tileX}:${tileZ}`)
-        return { tileX, tileZ }
-      }
-    }
-    // 그리드가 꽉 찬 경우 — 겹쳐서라도 놓는다(관제 화면에서 랙이 사라지는 편이 더 나쁘다).
-    return { tileX: 0, tileZ: 0 }
-  }
+/** 배치도 위 한 칸의 좌표·방위. */
+export type ScenePlacement = {
+  /** 열(0-base). 오른쪽 = EAST. */
+  tileX: number
+  /** 행(0-base). 아래 = SOUTH. */
+  tileZ: number
+  /** FMS 원값 — 표시·검증용. */
+  dir: LayoutDirection
+  /** three.js Y축 회전(rad). {@link directionToRotation} 참조. */
+  rotation: number
 }
 
 /**
- * FMS 랙 목록 + 저장된 배치 + ZONE u맵 → 3D 씬 랙 목록.
- * 배치가 없는 랙(신규 등록 등)은 빈 타일에 자동 배치한다.
+ * 랙으로 페어링되지 않은 배치 오브젝트 1건 — **종류별 색 박스 + 레이블**로 그린다(E18 ④).
  *
+ * 3D 모델은 확보하지 않는다("대강 구분만 되면 된다" — 제품 오너). 여기 담기는 것은
+ * ① 비-RACK 12종 ② `rack` 참조가 없거나 랙 목록과 페어링되지 않은 RACK 오브젝트다.
+ */
+export type SceneObject = {
+  /** 씬 키 — `zone_layout_object.id` 고정. 랙 위치 id 와 섞이지 않게 접두사를 붙인다. */
+  id: string
+  /** FMS 원값(모르는 종류도 그대로). */
+  type: string
+  /** 표시명 — `label` 우선, 비었으면 `type`(§11-31 ①). 지어내지 않는다. */
+  label: string
+  /** FMS 2D 에디터 팔레트 색. 모르는 종류는 회색. */
+  color: string
+  /** 박스 높이(m). RACK 만 실치수(U 수) 기반이고 나머지는 rack3d 임의값이다. */
+  heightM: number
+  placement: ScenePlacement
+}
+
+/** ZONE 하나의 3D 씬 입력 전부. */
+export type ZoneScene = {
+  /** `null` = 이 ZONE 은 netis-fms 레이아웃이 설정되지 않았다 → 3D 를 그리지 않는다(E18 ⑤). */
+  grid: SceneGrid | null
+  /** FMS 랙 목록(SSOT) 전량. 배치가 없는 랙은 `placement: null`이다. */
+  racks: RackData[]
+  /** 랙이 아닌(또는 페어링되지 않은) 배치 오브젝트. */
+  objects: SceneObject[]
+}
+
+/**
+ * FMS 2D 레이아웃 에디터 팔레트(§11-31 ①). **2D 와 3D 색이 같아야** 사용자가 대응을 바로 읽는다.
+ *
+ * 여기 없는 종류는 {@link UNKNOWN_OBJECT_COLOR} 회색으로 흘려보낸다 — FMS 가 나중에 type 을
+ * 늘려도 rack3d 가 깨지면 안 된다.
+ */
+export const LAYOUT_OBJECT_COLORS: Record<string, string> = {
+  RACK: '#1E5083',
+  CRAC: '#00796B',
+  UPS: '#7B1FA2',
+  POWER: '#C2185B',
+  FIRE: '#D32F2F',
+  WATER: '#0288D1',
+  SENSOR: '#E65100',
+  CCTV: '#388E3C',
+  DOOR: '#4E342E',
+  GATE: '#616161',
+  GAS: '#F57C00',
+  SEISMIC: '#512DA8',
+}
+
+/** 모르는 종류의 색. 팔레트 12종과 겹치지 않는 중립 회색이어야 한다. */
+export const UNKNOWN_OBJECT_COLOR = '#6E7B8A'
+
+/**
+ * 비-RACK 오브젝트의 박스 높이(m) — **rack3d 가 임의로 정한 값이다.**
+ *
+ * FMS 는 오브젝트의 물리 폭·깊이·높이를 **관리하지 않는다**(§11-31 ②: `zone_layout_object` 에
+ * width/depth 컬럼 없음). 그래서 이 수치는 측정값이 아니라 "대강 구분"을 위한 표현이고,
+ * **화면에 숫자로 내보내지 않는다**(형상은 근사여도 되지만 글자는 실값이어야 한다는 규칙).
+ * 실물 대략치를 참고해 정했다: 바닥 설치형(CRAC·배전반·방화문)은 사람 키 이상, 감지기·센서류는
+ * 낮게 두어 랙 사이에서 시야를 가리지 않게 한다.
+ */
+export const LAYOUT_OBJECT_HEIGHTS_M: Record<string, number> = {
+  CRAC: 2.0,
+  UPS: 1.6,
+  POWER: 1.8,
+  FIRE: 0.3,
+  WATER: 0.2,
+  SENSOR: 0.3,
+  CCTV: 0.35,
+  DOOR: 2.1,
+  GATE: 1.2,
+  GAS: 0.3,
+  SEISMIC: 0.3,
+}
+
+/** 모르는 종류의 박스 높이(m). */
+export const UNKNOWN_OBJECT_HEIGHT_M = 0.6
+
+/** 크기(U)를 모르는 RACK 오브젝트의 박스 높이(m) — 42U 랙 대략치. */
+const UNSIZED_RACK_HEIGHT_M = 2.0
+
+export function objectColor(type: string): string {
+  return LAYOUT_OBJECT_COLORS[type] ?? UNKNOWN_OBJECT_COLOR
+}
+
+/** 표시명 — `label` 우선, 비었으면 `type`. 둘 다 FMS 원값이다. */
+export function objectLabel(object: LayoutObject): string {
+  const label = object.label?.trim()
+  return label ? label : object.type
+}
+
+/**
+ * 방위 → three.js Y축 회전(rad).
+ *
+ * ⚠️ **`dir` 은 오브젝트 정면(FRONT)이 향하는 방위다** — FMS 스키마가 명시하고
+ * (`V24` COLUMN COMMENT "정면 방위"), FMS 는 이 값을 변환·반전 없이 그대로 저장·서빙한다(§11-30).
+ * **E17 텍스처 작업 때 이 규약을 다시 확인하지 않아도 되게 여기 적어 둔다:
+ * FRONT 텍스처는 `dir` 이 가리키는 면에, REAR 는 그 반대 면에 붙인다.**
+ * 우리 랙 GLB 는 **로컬 +Z 가 정면**이다(장비 클릭 히트박스가 z = +0.59, 경보 비컨이 z = −0.46).
+ *
+ * 좌표계(§11-30 3): 원점 (0,0) = 그리드 좌상단, x 증가 = EAST, z 증가 = SOUTH →
+ * **NORTH = z 감소**. 나침반 방위각은 N 0° / E 90° / S 180° / W 270°(시계 방향)다.
+ *
+ * 그런데 three.js Y 회전은 나침반 방위각과 같지 않다. 로컬 +Z 는 회전 θ 에서 월드
+ * (sin θ, 0, cos θ) 를 향하는데, 월드 +Z 는 SOUTH 다 → **θ = 180° − 방위각**.
+ * (NORTH 180° / EAST 90° / SOUTH 0° / WEST 270°. 아래 표가 그 결과다.)
+ */
+const DIRECTION_ROTATION_DEGREES: Record<LayoutDirection, number> = {
+  NORTH: 180,
+  EAST: 90,
+  SOUTH: 0,
+  WEST: 270,
+}
+
+export function directionToRotation(dir: LayoutDirection): number {
+  // FMS 계약은 4값뿐이지만 값 검증은 우리 타입이 아니라 서버가 한다(C5) —
+  // 모르는 값이 오면 랙이 NaN 회전으로 사라지는 것보다 NORTH 로 두는 편이 낫다.
+  const degrees = DIRECTION_ROTATION_DEGREES[dir] ?? DIRECTION_ROTATION_DEGREES.NORTH
+  return degrees * Math.PI / 180
+}
+
+/** FMS `grid` → 씬 그리드. 규격이 성립하지 않으면 `null`(= 미설정으로 취급, C5). */
+function toSceneGrid(layout: ZoneLayout | null): SceneGrid | null {
+  const grid = layout?.grid
+  if (!grid) return null
+  const { cols, rows, tileMm } = grid
+  if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols <= 0 || rows <= 0) return null
+  if (!Number.isFinite(tileMm) || tileMm <= 0) return null
+  return { cols, rows, tileSize: tileMm / 1000 }
+}
+
+/** 그리드 안의 정수 좌표인가. 밖이면 그리지 않는다 — 바닥 밖에 뜬 오브젝트가 더 혼란스럽다. */
+function toPlacement(object: LayoutObject, grid: SceneGrid): ScenePlacement | null {
+  if (!Number.isInteger(object.x) || !Number.isInteger(object.z)) return null
+  if (object.x < 0 || object.x >= grid.cols || object.z < 0 || object.z >= grid.rows) return null
+  return { tileX: object.x, tileZ: object.z, dir: object.dir, rotation: directionToRotation(object.dir) }
+}
+
+/**
+ * 박스 높이(m).
+ *
+ * RACK 만 실치수가 있다 — `objects[].rack.rackUnits`(U 수)로 랙별 높이를 그대로 반영한다.
+ * 크기 미설정(null)이면 대략치로 그린다. **높이는 형상이지 표시 수치가 아니므로** 이 폴백이
+ * 화면에 숫자로 새지 않는다(랙 크기 표시는 언제나 FMS 원값 `rackUnits`, 미설정이면 `—`).
+ */
+function objectHeightM(object: LayoutObject): number {
+  if (object.type !== 'RACK') return LAYOUT_OBJECT_HEIGHTS_M[object.type] ?? UNKNOWN_OBJECT_HEIGHT_M
+  const units = object.rack?.rackUnits
+  return typeof units === 'number' && units > 0
+    ? RACK_BASE_HEIGHT_M + units * RACK_UNIT_HEIGHT_M
+    : UNSIZED_RACK_HEIGHT_M
+}
+
+/**
+ * netis-fms 랙 목록 + ZONE 배치 + ZONE u맵 → 3D 씬.
+ *
+ * **페어링은 순서가 아니라 `locationId` 값으로 한다**(u맵 때와 같은 이유 — 서로 다른
+ * 엔드포인트 사이의 순서 결합은 깨지기 쉽고 깨져도 조용하다).
+ *
+ * 두 응답은 **양방향으로 어긋날 수 있고, 각각 다르게 다룬다**:
+ * - **랙 목록에 있는데 배치에 없는 랙**(= 배치되지 않음) → `placement: null`.
+ *   3D 에는 그리지 않지만 목록·검색·경보·대시보드에는 그대로 남긴다. 좌표를 지어내지
+ *   않으면서도 경보 중인 랙이 화면에서 사라지지 않게 하는 유일한 조합이다. 호출부가 수를 밝힌다.
+ * - **배치에만 있는 RACK 오브젝트**(랙 목록에 없거나 `rack: null`) → 랙이 아니라 색 박스로
+ *   그린다(`objects`). 랙 집합의 SSOT 는 `/zones/{id}/racks` 이므로 여기 있는 것만으로
+ *   랙을 만들어내지 않는다 — 온습도·u맵·판정이 없는 랙을 진짜 랙처럼 그리면 클릭했을 때
+ *   빈 상세가 뜬다. 박스로 그리면 "FMS 배치도에 이런 오브젝트가 있다"는 사실만 말한다.
+ *
+ * @param layout `GET /api/layouts/zones/{id}/layout` 응답. `null`이면 아직 못 받은 것이다.
  * @param uMaps `GET /api/zones/{id}/u-maps` 응답. `null`이면 아직 못 받은 것이다.
- *
- * **페어링은 순서가 아니라 `locationId` 값으로 한다.** FMS가 두 응답의 순서 일치를 계약으로
- * 보장하고 실측도 맞지만(`racks [17,16]` == `u-maps [17,16]`), 서로 다른 엔드포인트 사이의
- * 순서 결합은 깨지기 쉽고 깨져도 조용하다 — 값으로 맞추면 계약이 흔들려도 안전하다.
- *
- * 응답에 없는 랙은 `uMapKnown: false`가 된다. **"장비 0대"가 아니라 "모름"이다**(C6) —
- * 빈 배열로 채우면 화면이 "장착 장비 없음"이라고 단언한다.
  */
-export function buildRacksFromZone(
-  zoneRacks: RackSummary[],
-  placements: Map<string, RackPlacement>,
+export function buildZoneScene(
+  zoneRacks: RackSummary[] | null,
+  layout: ZoneLayout | null,
   uMaps: RackUMap[] | null,
-): RackData[] {
+): ZoneScene {
+  const grid = toSceneGrid(layout)
+
   const uMapByLocationId = new Map<number, RackUMap>()
   uMaps?.forEach((uMap) => uMapByLocationId.set(uMap.rack.locationId, uMap))
 
-  const occupied = new Set<string>()
-  zoneRacks.forEach((rack) => {
-    const placement = placements.get(rackElementId(rack.locationId))
-    if (placement) occupied.add(`${placement.gridX}:${placement.gridZ}`)
-  })
-  const allocate = createTileAllocator(occupied)
+  /** locationId → 배치. 같은 랙을 가리키는 오브젝트가 둘이면 먼저 온 것만 랙에 붙인다. */
+  const placementByLocationId = new Map<number, ScenePlacement>()
+  const objects: SceneObject[] = []
+  /**
+   * 랙 목록을 아직 못 받았으면 `null` — 그때는 "페어링 불가"로 **단정하지 않는다.**
+   * 단정하면 랙 목록이 도착하기 전까지 모든 랙이 박스로 그려졌다가 뒤집히는 깜빡임이 된다.
+   */
+  const knownLocationIds = zoneRacks ? new Set(zoneRacks.map((rack) => rack.locationId)) : null
 
-  return zoneRacks.map((rack) => {
-    const id = rackElementId(rack.locationId)
-    const placement = placements.get(id)
-    const tile = placement
-      ? { tileX: placement.gridX, tileZ: placement.gridZ }
-      : allocate()
+  if (grid) {
+    layout?.objects.forEach((object) => {
+      const placement = toPlacement(object, grid)
+      if (!placement) return
+      const locationId = object.type === 'RACK' ? object.rack?.locationId ?? null : null
+      const pairable = locationId !== null
+        && (knownLocationIds === null || knownLocationIds.has(locationId))
+        && !placementByLocationId.has(locationId)
+      if (pairable) {
+        placementByLocationId.set(locationId, placement)
+        return
+      }
+      objects.push({
+        id: `fms-layout-object-${object.id}`,
+        type: object.type,
+        label: objectLabel(object),
+        color: objectColor(object.type),
+        heightM: objectHeightM(object),
+        placement,
+      })
+    })
+  }
+
+  const racks = (zoneRacks ?? []).map((rack) => {
     const uMap = uMapByLocationId.get(rack.locationId)
     return {
-      id,
+      id: rackElementId(rack.locationId),
       label: rack.name,
       rackUnits: rack.rackUnits, // FMS 원값(미설정이면 null) — 지어낸 폴백을 두지 않는다
-      tileX: tile.tileX,
-      tileZ: tile.tileZ,
-      rotation: degreesToRadians(placement?.rotationDegrees ?? 0),
+      placement: placementByLocationId.get(rack.locationId) ?? null,
       servers: uMap ? toServerList(uMap) : [],
       uMapKnown: uMap !== undefined,
     }
   })
-}
 
-/** 저장된 배치를 무시하고 전부 빈 타일에 순서대로 다시 놓는다(에디터의 "자동 배치"). */
-export function autoArrangeRacks(racks: RackData[]): RackData[] {
-  const allocate = createTileAllocator(new Set<string>())
-  return racks.map((rack) => ({ ...rack, ...allocate(), rotation: 0 }))
-}
-
-export function cloneRackList(racks: RackData[]): RackData[] {
-  return racks.map((rack) => ({ ...rack, servers: rack.servers.map((server) => ({ ...server })) }))
-}
-
-export function saveRacksForDataCenter(dataCenterId: string, racks: RackData[]): boolean {
-  const payload: StoredRackLayout = {
-    version: LAYOUT_STORAGE_VERSION,
-    updatedAt: new Date().toISOString(),
-    racks: racks.map((rack) => ({
-      id: rack.id,
-      gridX: rack.tileX,
-      gridZ: rack.tileZ,
-      rotationDegrees: radiansToDegrees(rack.rotation),
-    })),
-  }
-  try {
-    window.localStorage.setItem(layoutStorageKey(dataCenterId), JSON.stringify(payload))
-    return true
-  } catch {
-    // 쿼터 초과나 프라이빗 모드 등으로 영속화에 실패한 경우 — 호출부가 사용자에게 알린다.
-    return false
-  }
+  return { grid, racks, objects }
 }
 
 // ── 씬 랙 객체 신원 유지 ─────────────────────────────────────────────────────

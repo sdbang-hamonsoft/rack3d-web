@@ -4,12 +4,18 @@ import { ContactShadows, Environment, Html, Lightformer, OrbitControls, useCurso
 import * as THREE from 'three'
 import type { Group } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
-import LayoutEditor from './LayoutEditor'
-import { SERVER_MODEL_UNITS, buildRacksFromZone, loadRackPlacements, rackElementId, reuseUnchangedRacks } from './rackLayouts'
-import type { RackCacheEntry, RackPlacement } from './rackLayouts'
+import {
+  RACK_BASE_HEIGHT_M,
+  RACK_UNIT_HEIGHT_M,
+  SERVER_MODEL_UNITS,
+  buildZoneScene,
+  rackElementId,
+  reuseUnchangedRacks,
+} from './rackLayouts'
+import type { RackCacheEntry, SceneGrid, SceneObject, ScenePlacement } from './rackLayouts'
 import type { RackData, ServerData, ServerModel } from './rackLayouts'
-import { collectZones, fetchSidebar, fetchZoneRacks, fetchZoneUMaps, type ZoneSummary } from './api/fms'
-import type { MeResponse, RackSummary, RackSeverity, RackUMap } from './api/types'
+import { collectZones, fetchSidebar, fetchZoneLayout, fetchZoneRacks, fetchZoneUMaps, type ZoneSummary } from './api/fms'
+import type { MeResponse, RackSummary, RackSeverity, RackUMap, ZoneLayout } from './api/types'
 import { bootstrapSession, goToFmsLogin, goToFmsPasswordChange } from './api/session'
 import { MANUAL_RETRY_COOLDOWN_MS, usePolledResource } from './hooks/usePolledResource'
 import {
@@ -67,16 +73,96 @@ const ZONE_POLL_INTERVAL_MS = 300_000
  */
 const UMAP_RETRY_INTERVAL_MS = 30_000
 
+/**
+ * ZONE 3D 배치(E18) **실패 재시도** 간격. u맵과 같은 규약이다 — 배치는 구조 데이터라
+ * ZONE 진입 시 1회만 받고(`repeat: false`) 자동 재수집 경로를 두지 않는다.
+ * 갱신 수단은 상단바 "지금 새로고침"이며 랙 목록·u맵과 **함께** 다시 받는다.
+ */
+const LAYOUT_RETRY_INTERVAL_MS = 30_000
 
-const TILE_SIZE = 0.6
-const UNIT_HEIGHT = 0.04445
-const RACK_INNER_BOTTOM = 0.06655
+/**
+ * 1U 높이·랙 바닥 오프셋(m)은 `rackLayouts`가 SSOT다 — 배치 오브젝트의 랙 박스 높이도
+ * 같은 상수로 계산하므로 두 곳에 두면 조용히 어긋난다.
+ */
+const UNIT_HEIGHT = RACK_UNIT_HEIGHT_M
+const RACK_INNER_BOTTOM = RACK_BASE_HEIGHT_M
 const MODEL_VERSION = '11'
 const SPLASH_DURATION = 3600
 const RACK_FOCUS_HEIGHT = 1.06
 const RACK_FOCUS_DISTANCE = 1.15
-const OVERVIEW_CAMERA_POSITION = new THREE.Vector3(5.4, 2.2, 9.5)
-const OVERVIEW_CAMERA_TARGET = new THREE.Vector3(3.3, 0.9, 4.2)
+
+/**
+ * 그리드 규격이 ZONE마다 다르므로(§11-30) **전체 보기 카메라도 ZONE마다 계산한다.**
+ * 예전의 고정 좌표(5.4, 2.2, 9.5)는 18×14×0.6m 전산실 하나에만 맞는 값이었다 —
+ * 실측 ZONE 10은 12×8이라 그대로 두면 바닥이 화면 한쪽에 치우친다.
+ */
+function overviewCamera(grid: SceneGrid | null): { position: THREE.Vector3; target: THREE.Vector3 } {
+  // 그리드를 아직 모를 때(로딩)의 임시값 — 이 상태에서는 씬에 아무것도 그리지 않는다.
+  const cols = grid?.cols ?? 18
+  const rows = grid?.rows ?? 14
+  const tileSize = grid?.tileSize ?? 0.6
+  const centerX = (cols - 1) / 2 * tileSize
+  const centerZ = (rows - 1) / 2 * tileSize
+  // 바닥 전체가 화면에 들어오도록 거리·높이를 **그리드 크기에 비례**시킨다.
+  // (하한 7.5m는 아주 작은 ZONE에서 카메라가 랙에 파묻히지 않게 하는 값이다.)
+  const distance = Math.max(cols * tileSize, rows * tileSize, 7.5)
+  return {
+    position: new THREE.Vector3(centerX, 0.9 + distance * 0.42, centerZ + distance * 0.66),
+    target: new THREE.Vector3(centerX, 0.9, centerZ),
+  }
+}
+
+/**
+ * 태양광(directionalLight) 방향 — 옛 고정 좌표 (6, 10, 7)에서 원점을 보던 그 방향 그대로다.
+ * 방향만 유지하고 **위치는 ZONE 중심 기준으로** 옮긴다(아래 `sun`).
+ */
+const SUN_DIRECTION = new THREE.Vector3(6, 10, 7).normalize()
+
+/**
+ * 조명·안개·그림자도 **ZONE 그리드에서 파생한다.** 예전 값은 18×14×0.6m 전산실 하나(중심 5.1, 3.9)에
+ * 맞춘 고정 좌표여서, 12×8인 실측 ZONE 10에서는 조명이 죄다 뒤쪽·바깥으로 밀려 앞·왼쪽이 어두웠다.
+ * 계수는 옛 18×14×0.6m 그리드의 값(안개 12·28m, 필 조명 거리 10m, 태양광 거리 13.6m 등)을
+ * 그대로 재현하도록 잡았다.
+ */
+function sceneMetrics(grid: SceneGrid | null) {
+  // 그리드를 아직 모를 때(로딩)의 임시값 — 이 상태에서는 씬에 아무것도 그리지 않는다.
+  const cols = grid?.cols ?? 18
+  const rows = grid?.rows ?? 14
+  const tileSize = grid?.tileSize ?? 0.6
+  // 타일 중심은 0..(n-1)*tile이고 양끝에 반 타일씩 더 있으니 바닥 크기는 cols×tile, rows×tile이다.
+  const floorWidth = cols * tileSize
+  const floorDepth = rows * tileSize
+  const centerX = (cols - 1) / 2 * tileSize
+  const centerZ = (rows - 1) / 2 * tileSize
+  // 전체 보기 카메라 거리와 같은 기준 크기(작은 ZONE 하한 7.5m 포함).
+  // 조명 도달거리(distance)·안개 근원거리를 여기에 비례시켜, 그리드가 커져 카메라가 멀어져도
+  // 바닥 뒤쪽이 안개에 먹히지 않게 한다.
+  const span = Math.max(floorWidth, floorDepth, 7.5)
+  // 태양광은 방향만 쓰는 조명이라 거리는 밝기와 무관하다. 그림자 카메라가 바닥을 다 담도록
+  // 그리드에 비례해 띄운다(하한은 옛 좌표의 거리 13.6m).
+  const sunDistance = Math.max(span * 1.3, 14)
+  return {
+    centerX,
+    centerZ,
+    floorWidth,
+    floorDepth,
+    span,
+    /** 태양광 위치 — 방향은 예전 그대로고 겨냥점만 ZONE 중심이다. */
+    sun: {
+      x: centerX + SUN_DIRECTION.x * sunDistance,
+      y: SUN_DIRECTION.y * sunDistance,
+      z: centerZ + SUN_DIRECTION.z * sunDistance,
+    },
+    /**
+     * 태양광 그림자 정사영 반경(m). three.js 기본값 ±5는 **원점 기준**이라 18×14(바닥 x −0.3~10.5)에서는
+     * 먼 쪽 절반이 프러스텀 밖으로 밀려 그림자가 아예 안 맺힌다 — 랙이 수십 대인 전산실에서 바로 드러난다.
+     * 바닥 대각선의 절반에 랙 그림자가 뻗는 길이(2.5m, 랙 2.1m · 태양 고도 약 48°)를 더해 전부 담는다.
+     */
+    shadowExtent: Math.hypot(floorWidth, floorDepth) / 2 + 2.5,
+    /** 접지 그림자(ContactShadows) 크기 — 바닥보다 30% 넓게. */
+    contactShadowScale: Math.max(floorWidth, floorDepth) * 1.3,
+  }
+}
 
 type ThemeMode = 'dark' | 'light'
 
@@ -321,8 +407,74 @@ function RackAlert({
   )
 }
 
+/**
+ * 배치 오브젝트 1건 — **종류별 색 박스 + 레이블**(E18 ④).
+ *
+ * 3D 모델은 확보하지 않는다("대강 구분만 되면 된다"). 바닥 점유는 FMS 모델상 **정확히 1타일**이고
+ * (§11-31 ②: `zone_layout_object`에 width/depth가 없고 `UNIQUE(zone,x,z)`), 실제 항온항습기가
+ * 600mm보다 커도 FMS는 물리 치수를 관리하지 않으므로 여기서 지어내지 않는다.
+ *
+ * 클릭 핸들러를 달지 않는 것은 의도다 — 이 오브젝트들에는 붙일 상세 데이터가 없고,
+ * 핸들러가 있으면 r3f가 `onPointerMissed`(전체 보기 복귀)를 막는다.
+ */
+function LayoutObjectMesh({ object, tileSize }: { object: SceneObject; tileSize: number }) {
+  const { placement, heightM } = object
+  // 1타일보다 조금 작게 — 옆 칸과 붙어 한 덩어리로 보이지 않게 칸 경계를 남긴다.
+  const footprint = Math.max(0.12, tileSize * 0.84)
+  // 바닥 타일은 높이 0.08이 y=0 중심이라 윗면이 0.04다.
+  const baseY = 0.04
+  // `args`로 넘기면 렌더마다 새 지오메트리가 만들어진다 — 박스와 모서리 선이 하나를 같이 쓴다.
+  const boxGeometry = useMemo(() => new THREE.BoxGeometry(footprint, heightM, footprint), [footprint, heightM])
+  useEffect(() => () => boxGeometry.dispose(), [boxGeometry])
+
+  return (
+    <group
+      position={[placement.tileX * tileSize, 0, placement.tileZ * tileSize]}
+      rotation={[0, placement.rotation, 0]}
+    >
+      {/*
+        ⚠️ 조명을 받는 재질(`meshStandardMaterial`)을 쓰지 않는다. 이 씬은 노출이 높고
+        ACES 톤매핑이 걸려 있어 팔레트 색이 통째로 밝은 쪽으로 밀린다 —
+        #D32F2F(화재)·#C2185B(배전반)·#F57C00(가스)이 서로 구분되지 않게 되는데,
+        **2D 에디터와 색이 맞아야 사용자가 대응을 읽는다**는 것이 이 색을 쓰는 이유 전부다.
+        `toneMapped={false}` + basic 재질이면 화면 색이 팔레트 값 그대로다.
+        형태감은 아래 모서리 선이 준다(음영 대신 윤곽) — 물리 모델인 랙과 시각적으로도 갈린다.
+      */}
+      <mesh position={[0, baseY + heightM / 2, 0]} geometry={boxGeometry} castShadow>
+        <meshBasicMaterial color={object.color} toneMapped={false} />
+      </mesh>
+      <lineSegments position={[0, baseY + heightM / 2, 0]} raycast={() => undefined}>
+        <edgesGeometry args={[boxGeometry]} />
+        <lineBasicMaterial color="#dceaf6" transparent opacity={0.5} toneMapped={false} />
+      </lineSegments>
+      {/*
+        정면(FRONT) 표시 — FMS 2D 에디터의 파란 막대와 같은 뜻이다(§11-30 2).
+        로컬 +Z가 정면이고, 그 면이 `dir`이 가리키는 방위를 향하도록 회전돼 있다.
+      */}
+      <mesh position={[0, baseY + heightM * 0.5, footprint / 2 + 0.006]}>
+        <boxGeometry args={[footprint * 0.62, Math.min(0.06, heightM * 0.16), 0.012]} />
+        <meshBasicMaterial color="#e8f6ff" toneMapped={false} />
+      </mesh>
+      {/*
+        레이블 높이에 하한(0.62m)을 둔다 — 감지기·센서류는 박스가 0.2~0.35m로 낮아서
+        박스 바로 위에 두면 `occlude` 판정이 바닥·자기 박스에 걸려 레이블이 통째로 사라진다
+        (실측: SENSOR 레이블이 `display:none`으로 숨겨졌다).
+      */}
+      <Html position={[0, baseY + Math.max(heightM + 0.14, 0.62), 0]} center distanceFactor={8} zIndexRange={[1, 0]} occlude>
+        <div className="layout-object-label" style={{ borderColor: object.color }}>
+          <i style={{ background: object.color }} />
+          {object.label}
+        </div>
+      </Html>
+    </group>
+  )
+}
+
 function Rack({
   rack,
+  /** FMS ZONE 배치도 좌표(E18). 배치되지 않은 랙은 호출부에서 걸러 여기 오지 않는다. */
+  placement,
+  grid,
   /** FMS 판정(E19 B1). 랙 경보 표시의 SSOT — 장비 상태(u맵)는 아직 오지 않는다. */
   severity,
   selected,
@@ -332,6 +484,8 @@ function Rack({
   onSelectServer,
 }: {
   rack: RackData
+  placement: ScenePlacement
+  grid: SceneGrid
   severity: RackSeverity
   selected: boolean
   selectedServerId: string | null
@@ -348,8 +502,13 @@ function Rack({
 
   return (
     <group
-      position={[rack.tileX * TILE_SIZE, 0.06, rack.tileZ * TILE_SIZE]}
-      rotation={[0, rack.rotation, 0]}
+      /*
+        ⚠️ 랙 GLB는 **타일 크기에 맞춰 늘리지 않는다.** 랙의 물리 치수(약 600×1100mm)는
+        전산실 타일이 600mm든 1000mm든 그대로다 — 타일에 맞춰 스케일하면 실물 비례가 깨진다.
+        타일 1칸 규약(§11-31 ②)은 "몇 칸을 점유하는가"에 대한 것이지 형상 크기가 아니다.
+      */
+      position={[placement.tileX * grid.tileSize, 0.06, placement.tileZ * grid.tileSize]}
+      rotation={[0, placement.rotation, 0]}
       onPointerEnter={(event) => { event.stopPropagation(); setHovered(true) }}
       onPointerLeave={() => setHovered(false)}
       onClick={(event) => { event.stopPropagation(); onSelect(rack) }}
@@ -434,7 +593,7 @@ function Rack({
                 borderColor: heatmap.color,
                 color: heatmap.color,
                 boxShadow: `0 0 18px ${heatmap.color}55`,
-                transform: `translate(${rack.tileX < 6 ? -22 : 22}px, ${rack.tileZ < 7 ? 7 : -7}px)`,
+                transform: `translate(${placement.tileX < grid.cols / 2 ? -22 : 22}px, ${placement.tileZ < grid.rows / 2 ? 7 : -7}px)`,
               }}
             >
               <i style={{ background: heatmap.color, boxShadow: `0 0 9px ${heatmap.color}` }} />
@@ -459,8 +618,8 @@ function Rack({
           label={rack.label}
           color={alertColor}
           showLabel={!heatmap}
-          offsetX={rack.tileX < 6 ? -34 : 34}
-          offsetY={rack.tileZ < 7 ? 10 : -10}
+          offsetX={placement.tileX < grid.cols / 2 ? -34 : 34}
+          offsetY={placement.tileZ < grid.rows / 2 ? 10 : -10}
         />
       )}
       {!hasIncident && (
@@ -472,7 +631,9 @@ function Rack({
   )
 }
 
-function FloorTiles({ columns = 18, rows = 14, theme }: { columns?: number; rows?: number; theme: ThemeMode }) {
+/** 바닥 — **규격은 전부 FMS ZONE 응답값**이다(cols/rows/tileMm). 상수로 굳히지 말 것(§11-30). */
+function FloorTiles({ grid, theme }: { grid: SceneGrid; theme: ThemeMode }) {
+  const { cols: columns, rows, tileSize } = grid
   const tiles = useMemo(() => Array.from({ length: columns * rows }, (_, index) => ({
     x: index % columns,
     z: Math.floor(index / columns),
@@ -482,8 +643,8 @@ function FloorTiles({ columns = 18, rows = 14, theme }: { columns?: number; rows
   return (
     <group>
       {tiles.map(({ x, z }) => (
-        <mesh key={`${x}-${z}`} position={[x * TILE_SIZE, 0, z * TILE_SIZE]} receiveShadow>
-          <boxGeometry args={[TILE_SIZE - 0.012, 0.08, TILE_SIZE - 0.012]} />
+        <mesh key={`${x}-${z}`} position={[x * tileSize, 0, z * tileSize]} receiveShadow>
+          <boxGeometry args={[tileSize - 0.012, 0.08, tileSize - 0.012]} />
           <meshStandardMaterial
             color={(x + z) % 2
               ? (lightTheme ? '#aab7c2' : '#263140')
@@ -495,18 +656,26 @@ function FloorTiles({ columns = 18, rows = 14, theme }: { columns?: number; rows
       ))}
       <gridHelper
         args={[
-          Math.max(columns, rows) * TILE_SIZE,
+          Math.max(columns, rows) * tileSize,
           Math.max(columns, rows),
           lightTheme ? '#718598' : '#52637a',
           lightTheme ? '#95a5b2' : '#354256',
         ]}
-        position={[(columns - 1) * TILE_SIZE / 2, 0.045, (rows - 1) * TILE_SIZE / 2]}
+        position={[(columns - 1) * tileSize / 2, 0.045, (rows - 1) * tileSize / 2]}
       />
     </group>
   )
 }
 
-function CameraController({ focusRack, focusServer }: { focusRack: RackData | null; focusServer: ServerData | null }) {
+function CameraController({
+  grid,
+  focusRack,
+  focusServer,
+}: {
+  grid: SceneGrid | null
+  focusRack: RackData | null
+  focusServer: ServerData | null
+}) {
   const { camera } = useThree()
   const controls = useRef<OrbitControlsImpl>(null)
   const pressed = useRef(new Set<string>())
@@ -547,19 +716,34 @@ function CameraController({ focusRack, focusServer }: { focusRack: RackData | nu
    * 카메라 위치를 실제로 결정하는 값(랙 좌표·회전, 장비 U 위치)만 의존성으로 둔다 —
    * 같은 랙의 **다른** 장비가 u맵으로 추가돼도 카메라는 흔들리지 않는다.
    */
-  const focusRackX = focusRack ? focusRack.tileX : null
-  const focusRackZ = focusRack ? focusRack.tileZ : null
-  const focusRackRotation = focusRack ? focusRack.rotation : null
+  const focusRackX = focusRack?.placement ? focusRack.placement.tileX : null
+  const focusRackZ = focusRack?.placement ? focusRack.placement.tileZ : null
+  const focusRackRotation = focusRack?.placement ? focusRack.placement.rotation : null
   const focusServerStartU = focusServer ? focusServer.startU : null
   const focusServerUnits = focusServer ? focusServer.units : null
+  /**
+   * 포커스한 랙이 **FMS 배치도에 없으면**(placement null) 갈 좌표가 없다. 전체 보기로
+   * 되돌리지 않고 **카메라를 그대로 둔다** — 검색·경보 목록에서 미배치 랙을 골랐을 때
+   * 화면이 이유 없이 튀지 않게. 상세 패널이 "배치되지 않았다"는 사실을 글로 밝힌다.
+   */
+  const focusUnplaced = focusRack !== null && focusRack.placement === null
+  const gridCols = grid?.cols ?? null
+  const gridRows = grid?.rows ?? null
+  const gridTileSize = grid?.tileSize ?? null
 
   useEffect(() => {
+    if (focusUnplaced) return
+    const overview = overviewCamera(
+      gridCols !== null && gridRows !== null && gridTileSize !== null
+        ? { cols: gridCols, rows: gridRows, tileSize: gridTileSize }
+        : null,
+    )
     fromPosition.current.copy(camera.position)
-    fromTarget.current.copy(controls.current?.target ?? OVERVIEW_CAMERA_TARGET)
+    fromTarget.current.copy(controls.current?.target ?? overview.target)
 
-    if (focusRackX !== null && focusRackZ !== null && focusRackRotation !== null) {
-      const rackX = focusRackX * TILE_SIZE
-      const rackZ = focusRackZ * TILE_SIZE
+    if (focusRackX !== null && focusRackZ !== null && focusRackRotation !== null && gridTileSize !== null) {
+      const rackX = focusRackX * gridTileSize
+      const rackZ = focusRackZ * gridTileSize
       const focusHeight = focusServerStartU !== null && focusServerUnits !== null
         ? Math.max(0.2, 0.06 + RACK_INNER_BOTTOM + (focusServerStartU - 1 + focusServerUnits / 2) * UNIT_HEIGHT)
         : RACK_FOCUS_HEIGHT
@@ -567,12 +751,23 @@ function CameraController({ focusRack, focusServer }: { focusRack: RackData | nu
       toTarget.current.set(rackX, focusHeight, rackZ)
       toPosition.current.copy(toTarget.current).addScaledVector(rackForward.current, RACK_FOCUS_DISTANCE)
     } else {
-      toPosition.current.copy(OVERVIEW_CAMERA_POSITION)
-      toTarget.current.copy(OVERVIEW_CAMERA_TARGET)
+      toPosition.current.copy(overview.position)
+      toTarget.current.copy(overview.target)
     }
 
     transition.current = 0
-  }, [camera, focusRackX, focusRackZ, focusRackRotation, focusServerStartU, focusServerUnits])
+  }, [
+    camera,
+    focusRackX,
+    focusRackZ,
+    focusRackRotation,
+    focusServerStartU,
+    focusServerUnits,
+    focusUnplaced,
+    gridCols,
+    gridRows,
+    gridTileSize,
+  ])
 
   useFrame(({ camera }, delta) => {
     if (transition.current < 1) {
@@ -613,6 +808,11 @@ function CameraController({ focusRack, focusServer }: { focusRack: RackData | nu
   return (
     <OrbitControls
       ref={controls}
+      /*
+        초기 타깃. **옛 18×14×0.6m 그리드의 중심값이 남아 있는 자리다** — 그리드에서 파생하지 않는 것이
+        의도다. 위 effect가 마운트 즉시(전이 시작 프레임에) ZONE 그리드에 맞춘 타깃으로 덮어쓰므로
+        이 값이 화면에 보이는 순간은 없다. 조명·안개처럼 파생시켜도 결과가 같아서 그대로 둔다.
+      */
       target={[3.3, 0.9, 4.2]}
       enableDamping={false}
       rotateSpeed={0.38}
@@ -631,7 +831,10 @@ function Loading() {
 }
 
 function DataCenterScene({
+  /** `null` = FMS 레이아웃 미설정. 바닥도 랙도 그리지 않는다(E18 ⑤) — 화면 위 안내가 대신 뜬다. */
+  grid,
   racks,
+  objects,
   focusedRack,
   selectedServer,
   heatmapVisuals,
@@ -640,7 +843,9 @@ function DataCenterScene({
   onFocusRack,
   onSelectServer,
 }: {
+  grid: SceneGrid | null
   racks: RackData[]
+  objects: SceneObject[]
   focusedRack: RackData | null
   selectedServer: ServerData | null
   heatmapVisuals: Map<string, RackHeatmapVisual>
@@ -650,36 +855,74 @@ function DataCenterScene({
   onSelectServer: (rack: RackData, server: ServerData) => void
 }) {
   const lightTheme = theme === 'light'
+  const metrics = sceneMetrics(grid)
+  /**
+   * 태양광이 겨냥할 지점. three.js는 `light.target`의 **matrixWorld**로 방향을 잡으므로
+   * 타깃이 씬 그래프에 들어가 있어야 한다 — 그래서 `<primitive>`로 실제로 씬에 넣는다.
+   * (기본 타깃은 씬에 없는 원점 오브젝트여서 방향·그림자 프러스텀이 바닥 모서리 (0,0)에 붙어 있었다.)
+   */
+  const sunTarget = useMemo(() => new THREE.Object3D(), [])
 
   return (
     <>
       <color attach="background" args={[lightTheme ? '#d5e0e9' : '#071019']} />
-      <fog attach="fog" args={[lightTheme ? '#d5e0e9' : '#071019', 12, 28]} />
+      <fog attach="fog" args={[lightTheme ? '#d5e0e9' : '#071019', metrics.span * 1.1, metrics.span * 2.6]} />
       <ambientLight intensity={lightTheme ? 1.45 : 1.7} color="#b9d8f3" />
       <hemisphereLight args={['#e5f4ff', lightTheme ? '#728191' : '#425269', lightTheme ? 1.8 : 2.1]} />
+      {/*
+        태양광 — 위치·겨냥점·그림자 프러스텀 전부 ZONE 중심에서 파생한다.
+        `shadow-camera-near/far`는 three.js 기본값(0.5 / 500)을 그대로 둔다. 정사영 그림자 카메라의
+        깊이는 선형이라 `shadow-bias`(−0.0002)가 near/far 범위에 비례해 먹는데, 범위를 좁히면
+        지금 검증된 bias 값이 그림자 여드름(acne) 쪽으로 기운다 — 손댈 이유가 없다.
+      */}
+      <primitive object={sunTarget} position={[metrics.centerX, 0, metrics.centerZ]} />
       <directionalLight
-        position={[6, 10, 7]}
+        position={[metrics.sun.x, metrics.sun.y, metrics.sun.z]}
+        target={sunTarget}
         intensity={3.2}
         color="#e8f4ff"
         castShadow
         shadow-mapSize={[2048, 2048]}
         shadow-bias={-0.0002}
+        shadow-camera-left={-metrics.shadowExtent}
+        shadow-camera-right={metrics.shadowExtent}
+        shadow-camera-top={metrics.shadowExtent}
+        shadow-camera-bottom={-metrics.shadowExtent}
       />
-      <rectAreaLight position={[3.3, 4.8, 4.2]} rotation={[-Math.PI / 2, 0, 0]} width={8} height={7} intensity={9} color="#d8efff" />
-      <pointLight position={[3.3, 2.6, 8.5]} intensity={16} distance={14} decay={1.6} color="#d5edff" />
-      <pointLight position={[0.5, 2.2, 4]} intensity={8} distance={10} decay={1.7} color="#6bc8ff" />
-      <pointLight position={[7.5, 2.2, 4]} intensity={8} distance={10} decay={1.7} color="#8dd8ff" />
+      {/* 천장 소프트박스 — 바닥 중심 위에서 바닥 크기의 80%를 덮는다. */}
+      <rectAreaLight
+        position={[metrics.centerX, 4.8, metrics.centerZ]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        width={metrics.floorWidth * 0.8}
+        height={metrics.floorDepth * 0.8}
+        intensity={9}
+        color="#d8efff"
+      />
+      {/* 앞쪽(전체 보기 카메라 쪽) 키 라이트 — 바닥 앞 경계 바로 바깥. */}
+      <pointLight position={[metrics.centerX, 2.6, metrics.centerZ + metrics.floorDepth * 0.55]} intensity={16} distance={metrics.span * 1.3} decay={1.6} color="#d5edff" />
+      {/* 좌·우 필 라이트 — 중심 기준 대칭이라 ZONE이 바뀌어도 한쪽만 어두워지지 않는다. */}
+      <pointLight position={[metrics.centerX - metrics.floorWidth * 0.42, 2.2, metrics.centerZ]} intensity={8} distance={metrics.span * 0.95} decay={1.7} color="#6bc8ff" />
+      <pointLight position={[metrics.centerX + metrics.floorWidth * 0.42, 2.2, metrics.centerZ]} intensity={8} distance={metrics.span * 0.95} decay={1.7} color="#8dd8ff" />
       <Environment resolution={256}>
         <Lightformer intensity={2.2} color="#dceeff" position={[0, 5, -4]} scale={[10, 4, 1]} />
         <Lightformer intensity={1.8} color="#8dccff" position={[-5, 2, 2]} rotation={[0, Math.PI / 2, 0]} scale={[6, 3, 1]} />
         <Lightformer intensity={1.6} color="#ffffff" position={[6, 1, 4]} rotation={[0, -Math.PI / 2, 0]} scale={[5, 2, 1]} />
       </Environment>
       <Suspense fallback={<Loading />}>
-        <FloorTiles theme={theme} />
-        {racks.map((rack) => (
+        {grid && <FloorTiles grid={grid} theme={theme} />}
+        {grid && objects.map((object) => (
+          <LayoutObjectMesh key={object.id} object={object} tileSize={grid.tileSize} />
+        ))}
+        {/*
+          **배치가 없는 랙은 그리지 않는다**(E18 ⑤) — 좌표를 지어내면 실제 배치로 오인된다.
+          그 랙들은 목록·검색·경보·대시보드에는 그대로 남고, 씬 위 안내가 수를 밝힌다.
+        */}
+        {grid && racks.map((rack) => rack.placement && (
           <Rack
             key={rack.id}
             rack={rack}
+            placement={rack.placement}
+            grid={grid}
             severity={rackSeverities.get(rack.id) ?? 'NORMAL'}
             selected={focusedRack?.id === rack.id}
             selectedServerId={selectedServer?.id ?? null}
@@ -688,9 +931,18 @@ function DataCenterScene({
             onSelectServer={onSelectServer}
           />
         ))}
-        <ContactShadows position={[5.1, 0.055, 3.9]} scale={14} opacity={lightTheme ? 0.25 : 0.38} blur={2.4} far={5} resolution={1024} />
+        {grid && (
+          <ContactShadows
+            position={[metrics.centerX, 0.055, metrics.centerZ]}
+            scale={metrics.contactShadowScale}
+            opacity={lightTheme ? 0.25 : 0.38}
+            blur={2.4}
+            far={5}
+            resolution={1024}
+          />
+        )}
       </Suspense>
-      <CameraController focusRack={focusedRack} focusServer={selectedServer} />
+      <CameraController grid={grid} focusRack={focusedRack} focusServer={selectedServer} />
     </>
   )
 }
@@ -1609,17 +1861,6 @@ function DataCenterDashboard({
 }
 
 /**
- * 저장된 3D 배치를 읽는다.
- * `revision`은 값을 쓰지 않고 재조회 시점만 정하는 키다(localStorage는 React 상태가 아니라
- * 값이 바뀌어도 리렌더가 걸리지 않으므로, 에디터 저장 후 이 값을 올려 다시 읽게 한다).
- */
-function readPlacements(zoneId: number | null, revision: number): Map<string, RackPlacement> {
-  void revision
-  if (zoneId === null) return new Map<string, RackPlacement>()
-  return loadRackPlacements(String(zoneId))
-}
-
-/**
  * 수동 재시도 버튼.
  *
  * 실제 연타 방어는 `usePolledResource`의 쿨다운이 한다(버튼을 우회해도 막힌다).
@@ -1752,27 +1993,28 @@ function SessionNotice({
  * ref를 렌더 중에 쓰면 `react-hooks/refs`에 걸리므로, 이 저장소가 이미 쓰는
  * "렌더 중 상태 조정" 패턴(`usePolledResource`)으로 캐시를 상태에 둔다.
  */
-function useSceneRacks(
+function useZoneScene(
   zoneRacks: RackSummary[] | null,
-  placements: Map<string, RackPlacement>,
+  layout: ZoneLayout | null,
   uMaps: RackUMap[] | null,
-): RackData[] {
+): { grid: SceneGrid | null; racks: RackData[]; objects: SceneObject[] } {
   const build = (cache: Map<string, RackCacheEntry>) => {
-    const built = zoneRacks ? buildRacksFromZone(zoneRacks, placements, uMaps) : []
-    return reuseUnchangedRacks(cache, built)
+    const scene = buildZoneScene(zoneRacks, layout, uMaps)
+    const { racks, cache: nextCache } = reuseUnchangedRacks(cache, scene.racks)
+    return { grid: scene.grid, objects: scene.objects, racks, cache: nextCache }
   }
 
   const [state, setState] = useState(() => {
     const result = build(new Map<string, RackCacheEntry>())
-    return { zoneRacks, placements, uMaps, ...result }
+    return { zoneRacks, layout, uMaps, ...result }
   })
 
-  if (state.zoneRacks !== zoneRacks || state.placements !== placements || state.uMaps !== uMaps) {
+  if (state.zoneRacks !== zoneRacks || state.layout !== layout || state.uMaps !== uMaps) {
     const result = build(state.cache)
-    setState({ zoneRacks, placements, uMaps, ...result })
+    setState({ zoneRacks, layout, uMaps, ...result })
   }
 
-  return state.racks
+  return state
 }
 
 function preloadSceneAssets() {
@@ -1794,9 +2036,6 @@ function App() {
   })
   const [session, setSession] = useState<SessionState>({ status: 'loading' })
   const [selectedDataCenter, setSelectedDataCenter] = useState<ZoneSummary | null>(null)
-  const [view, setView] = useState<'monitor' | 'editor'>('monitor')
-  /** 저장된 3D 배치를 다시 읽어야 할 때 올린다(에디터 저장 직후). */
-  const [placementVersion, setPlacementVersion] = useState(0)
   const [focusedRackId, setFocusedRackId] = useState<string | null>(null)
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null)
   const [dashboardOpen, setDashboardOpen] = useState(false)
@@ -1853,14 +2092,30 @@ function App() {
   const uMapResource = usePolledResource(uMapFetcher, UMAP_RETRY_INTERVAL_MS, { repeat: false })
   const uMaps = uMapResource.data
 
-  /** 저장된 3D 배치(에디터 저장 시 placementVersion이 올라가 다시 읽는다). */
-  const placements = useMemo(
-    () => readPlacements(selectedZoneId, placementVersion),
-    [selectedZoneId, placementVersion],
+  /**
+   * ZONE 3D 배치(E18) — u맵과 **같은 규약**이다: 구조 데이터라 ZONE 진입 시 1회만 받고
+   * (`repeat: false`) 자동 재수집 경로를 두지 않는다. 갱신은 상단바 "지금 새로고침"이
+   * 랙 목록·u맵과 **함께** 한다.
+   *
+   * ⚠️ 좌표의 SSOT가 여기로 옮겨졌다. 예전에는 `localStorage`에 저장하고 없으면 자동 배치로
+   * 채웠는데, 그래서 **FMS 레이아웃 설정에서 랙을 옮겨도 3D가 안 바뀌었다**(E18 계기).
+   */
+  const layoutFetcher = useMemo(
+    () => (sessionReady && selectedZoneId !== null ? () => fetchZoneLayout(selectedZoneId) : null),
+    [sessionReady, selectedZoneId],
   )
+  const layoutResource = usePolledResource(layoutFetcher, LAYOUT_RETRY_INTERVAL_MS, { repeat: false })
+  const layout = layoutResource.data
 
-  /** FMS 랙 목록(SSOT) + 로컬 3D 배치 + ZONE u맵. 값이 안 바뀐 랙은 객체 신원을 유지한다. */
-  const racks = useSceneRacks(zoneRacks, placements, uMaps)
+  /** FMS 랙 목록(SSOT) + ZONE 배치 + ZONE u맵. 값이 안 바뀐 랙은 객체 신원을 유지한다. */
+  const { grid, racks, objects: sceneObjects } = useZoneScene(zoneRacks, layout, uMaps)
+  /**
+   * 배치되지 않은 랙 — 3D에는 없지만 목록·검색·경보에는 있다. 수를 밝히지 않으면
+   * "씬에 랙이 몇 대 빠져 있다"를 사용자가 알 방법이 없다.
+   */
+  const unplacedRacks = useMemo(() => racks.filter((rack) => rack.placement === null), [racks])
+  /** 응답은 받았는데 그리드가 없다 = netis-fms 레이아웃 미설정(실측 8 ZONE 중 6개). */
+  const layoutUnset = layout !== null && grid === null
 
   /** 3D 씬의 랙 경보 표시에 쓰는 FMS 판정 맵. */
   const rackSeverities = useMemo(() => {
@@ -1932,8 +2187,11 @@ function App() {
     if (!at) return { tone: 'stale', label: '연결 중', detail: 'netis-fms 응답 대기 중' }
     // 텔레메트리는 최신인데 구조(u맵)만 못 받은 경우도 LIVE라고 단언하지 않는다 —
     // 화면의 장비 목록·U 배치가 실제와 다를 수 있다는 사실은 알려야 한다.
-    if (uMapResource.failure) {
-      return { tone: 'stale', label: 'LIVE · 구조 미갱신', detail: `랙 U 배치를 갱신하지 못했습니다 · 측정값 갱신 ${time}` }
+    if (uMapResource.failure || layoutResource.failure) {
+      const what = uMapResource.failure && layoutResource.failure
+        ? '랙 U 배치와 3D 배치를'
+        : uMapResource.failure ? '랙 U 배치를' : '3D 배치를'
+      return { tone: 'stale', label: 'LIVE · 구조 미갱신', detail: `${what} 갱신하지 못했습니다 · 측정값 갱신 ${time}` }
     }
     return { tone: 'live', label: 'LIVE', detail: `마지막 갱신 ${time}` }
   })()
@@ -1941,13 +2199,15 @@ function App() {
   /**
    * 수동 갱신 — **측정값과 구조를 함께** 다시 받는다.
    *
-   * 구조(u맵)는 자동 재수집 경로가 없으므로(진입 시 1회), 이 버튼이 사용자가 구조를 갱신할 수
-   * 있는 **유일한 수단**이다. 랙 목록만 새로 받으면 "자산을 옮겼는데 화면이 그대로"가 된다.
+   * 구조(u맵·3D 배치)는 자동 재수집 경로가 없으므로(진입 시 1회), 이 버튼이 사용자가 구조를
+   * 갱신할 수 있는 **유일한 수단**이다. 랙 목록만 새로 받으면 "FMS에서 랙을 옮겼는데 화면이
+   * 그대로"가 된다 — 그게 정확히 E18을 시작하게 만든 증상이다.
    * 각 자원의 연타 쿨다운(5초)은 폴링 훅이 각각 강제한다.
    */
   const refreshFromFms = () => {
     racksResource.retryNow()
     uMapResource.retryNow()
+    layoutResource.retryNow()
   }
 
   /** 상단바 "IN RACKS" — 랙 내 자산 합(가짜 0 방지 헬퍼 경유). */
@@ -2000,14 +2260,6 @@ function App() {
     // 랙 목록은 폴링 훅이 FMS에서 가져온다 — 여기서는 선택만 바꾼다.
     setSelectedDataCenter(zone)
   }
-  /** 에디터는 localStorage 배치만 바꾼다. 랙 자체는 FMS가 SSOT라 다시 읽어 반영한다. */
-  const handleEditorSave = () => {
-    setPlacementVersion((current) => current + 1)
-    setSelectedServerId(null)
-    setIncidentMode(false)
-    setView('monitor')
-  }
-
   const clearFocus = () => {
     setFocusedRackId(null)
     setSelectedServerId(null)
@@ -2067,22 +2319,6 @@ function App() {
     )
   }
 
-  if (view === 'editor') {
-    return (
-      <LayoutEditor
-        dataCenter={{
-          id: String(selectedDataCenter.id),
-          code: selectedDataCenter.code ?? NO_VALUE,
-          name: selectedDataCenter.name,
-        }}
-        initialRacks={racks}
-        theme={theme}
-        onSave={handleEditorSave}
-        onCancel={() => setView('monitor')}
-      />
-    )
-  }
-
   return (
     <main className="app-shell" data-theme={theme}>
       <header className="topbar">
@@ -2101,34 +2337,10 @@ function App() {
         </div>
         <AssetSearch rackData={racks} rackFacts={rackFactsById} onSelectRack={handleFocusRack} onSelectServer={handleSelectServer} />
         {/*
-          랙 목록을 아직 못 받은 상태(로딩·실패·권한 없음)에서 에디터에 들어가면 빈 배치를
-          저장해 그 전산실의 저장된 좌표가 전부 지워진다. 랙이 0대일 때도 마찬가지다 —
-          `200 + []`는 null이 아니라 통과해 버리므로 길이도 함께 본다(배치할 랙이 없으면 열 이유도 없다).
+          ⚠️ 여기 있던 **LAYOUT EDIT 버튼(2D 배치 에디터 진입)은 제거했다**(E18 ①).
+          3D 좌표는 netis-fms 레이아웃 설정이 SSOT이고 rack3d는 읽기 전용이다 —
+          편집 지점이 두 곳이면 어느 쪽이 정답인지 흐려진다. `src/LayoutEditor.tsx`도 함께 삭제했다.
         */}
-        <button
-          className="theme-toggle layout-edit-button"
-          type="button"
-          onClick={() => setView('editor')}
-          disabled={zoneRacks === null || zoneRacks.length === 0}
-          aria-label="랙 배치 에디터 열기"
-          title={
-            zoneRacks === null
-              ? '랙 목록을 불러온 뒤 사용할 수 있습니다'
-              : zoneRacks.length === 0
-                ? '이 전산실에 배치할 랙이 없습니다'
-                : '랙 배치 에디터 열기'
-          }
-        >
-          <span className="theme-toggle-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24">
-              <rect x="4" y="4" width="6.6" height="6.6" rx="1.3" />
-              <rect x="13.4" y="4" width="6.6" height="6.6" rx="1.3" />
-              <rect x="4" y="13.4" width="6.6" height="6.6" rx="1.3" />
-              <path d="m14.6 19.9 5.3-5.3 1.6 1.6-5.3 5.3-2.2.6Z" />
-            </svg>
-          </span>
-          <span className="theme-toggle-copy"><small>FLOOR PLAN</small><strong>LAYOUT EDIT</strong></span>
-        </button>
         {/*
           구조(u맵)는 진입 시 1회만 받으므로 **상시 노출되는 갱신 수단이 필요하다.**
           예전에는 실패 화면 안에만 재시도 버튼이 있어, 정상 상태에서 자산 배치가 바뀌면
@@ -2194,7 +2406,9 @@ function App() {
             onPointerMissed={clearFocus}
           >
             <DataCenterScene
+              grid={grid}
               racks={racks}
+              objects={sceneObjects}
               focusedRack={focusedRack}
               selectedServer={selectedServer}
               heatmapVisuals={heatmapDataset.visuals}
@@ -2229,8 +2443,45 @@ function App() {
                 지금 새로고침
               </RetryButton>
             </div>
-          ) : zoneRacks && zoneRacks.length === 0 ? (
+          ) : !layout && layoutResource.failure ? (
+            /* 배치를 한 번도 못 받았다 — 좌표가 없으므로 씬이 비어 있는 이유를 밝힌다. */
+            <div className={`scene-state ${layoutResource.failure.kind}`} role="alert">
+              <span>3D 배치를 불러오지 못했습니다. {layoutResource.failure.message}</span>
+              {layoutResource.nextAttemptAt && (
+                <small>다음 자동 갱신 {layoutResource.nextAttemptAt.toLocaleTimeString('ko-KR')}</small>
+              )}
+              <RetryButton onRetry={refreshFromFms} busy={layoutResource.loading}>
+                지금 새로고침
+              </RetryButton>
+            </div>
+          ) : !layout ? (
+            <p className="scene-state" role="status">3D 배치를 불러오는 중…</p>
+          ) : layoutUnset ? (
+            /*
+              **자동 배치로 채우지 않는다**(E18 ⑤ 확정). 실측 8개 ZONE 중 6개가 미설정이라
+              임의 배치를 보여주면 "표시를 붙여도 실제 배치로 오인"되는 화면이 6개 생긴다 —
+              가짜 온도 그래프를 걷어낸 것과 같은 이유다.
+            */
+            <div className="scene-state layout-unset" role="status">
+              <strong>3D 배치가 설정되지 않았습니다</strong>
+              <span>netis-fms 환경설정 &gt; 레이아웃 설정에서 이 전산실의 배치를 지정하세요.</span>
+              <small>배치를 지정한 뒤 상단 "지금 새로고침"을 누르면 반영됩니다.</small>
+            </div>
+          ) : zoneRacks && zoneRacks.length === 0 && sceneObjects.length === 0 ? (
             <p className="scene-state" role="status">이 전산실에 등록된 랙이 없습니다.</p>
+          ) : unplacedRacks.length > 0 ? (
+            /*
+              배치되지 않은 랙은 좌표가 없어 3D에 그릴 수 없다. **조용히 빼면 안 된다** —
+              경보 중인 랙이 씬에서 사라진 것을 사용자가 알 방법이 없어진다.
+            */
+            <div className="scene-state layout-unset" role="status">
+              <strong>랙 {unplacedRacks.length}대가 3D 배치에 없습니다</strong>
+              <span>
+                {unplacedRacks.slice(0, 4).map((rack) => rack.label).join(' · ')}
+                {unplacedRacks.length > 4 ? ` 외 ${unplacedRacks.length - 4}대` : ''}
+              </span>
+              <small>netis-fms 레이아웃 설정에서 배치하면 3D에 표시됩니다. 목록·검색·경보에는 그대로 있습니다.</small>
+            </div>
           ) : null}
         </div>
 
@@ -2275,7 +2526,20 @@ function App() {
                     : NO_VALUE}
                 </span>
               </div>
-              <span className="rack-focus-meta">FRONT · LEVEL VIEW</span>
+              <span className="rack-focus-meta">
+                {focusedRack.placement
+                  ? `FRONT · ${focusedRack.placement.dir} · X ${focusedRack.placement.tileX} / Z ${focusedRack.placement.tileZ}`
+                  : 'FRONT · LEVEL VIEW'}
+              </span>
+              {/*
+                배치가 없으면 3D에 랙이 없다. 패널만 열려 있고 씬에는 아무것도 없는 상태를
+                설명 없이 두면 "랙이 사라졌다"로 읽힌다 — 사실(FMS 배치도에 없음)만 밝힌다.
+              */}
+              {!focusedRack.placement && (
+                <p className="rack-source-note warn">
+                  ⚠ netis-fms 3D 배치에 이 랙이 없어 씬에 표시되지 않습니다. 레이아웃 설정에서 배치하세요.
+                </p>
+              )}
 
               {/*
                 **점유·여유 U는 FMS 집계(RackSummary)에서만 파생한다.** 같은 수치를 u맵에서

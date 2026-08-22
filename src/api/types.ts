@@ -133,3 +133,81 @@ export type RackUMap = {
   rack: RackUMapRack
   assets: RackAsset[]
 }
+
+// ── ZONE 3D 배치(E18) ────────────────────────────────────────────────────────
+
+/**
+ * `LayoutDtos.LayoutGrid` — `GET /api/layouts/zones/{zoneId}/layout` 의 `grid`.
+ *
+ * ⚠️ **레이아웃을 한 번도 설정하지 않은 ZONE 은 `grid` 자체가 `null` 로 온다**
+ * (실측 2026-08-22: id 9·11·12·13·14·15 가 `grid: null, objects: []`).
+ * 그래서 이 필드는 optional 이 아니라 **nullable** 이어야 실제와 맞는다.
+ *
+ * 규격은 **ZONE 마다 다르다**(실측: id 10 = 12×8/2800mm, id 19 = 18×14/3200mm).
+ * 상수로 굳히지 말 것 — 예전의 `GRID_COLUMNS 18`·`GRID_ROWS 14`·`TILE_SIZE 0.6` 이
+ * 정확히 그 실수였다(§11-30).
+ */
+export type LayoutGrid = {
+  /** 열 수(x 축). */
+  cols: number
+  /** 행 수(z 축). */
+  rows: number
+  /** 타일 한 변(mm). 현재 실데이터는 전부 600 이지만 ZONE 별 설정 가능 — 하드코딩 금지. */
+  tileMm: number
+  /** 천장 높이(mm). 가변(2800·3200). 3D 미반영 — 근거는 `SceneGrid` 주석 참조. */
+  ceilingMm: number | null
+}
+
+/**
+ * 오브젝트 정면이 향하는 방위. **정확히 4값**(V24 CHECK `dir IN (...)`, §11-30) —
+ * 45°·임의각은 없다. FMS 는 이 값을 변환·반전 없이 그대로 저장·서빙한다.
+ */
+export type LayoutDirection = 'NORTH' | 'EAST' | 'SOUTH' | 'WEST'
+
+/**
+ * `LayoutDtos.LayoutObject.rack` — 배치 오브젝트가 가리키는 랙 위치.
+ *
+ * ⚠️ **`type: 'RACK'` 이어도 `null` 일 수 있다**(실측 ZONE 19: `type RACK`, `rack: null`) —
+ * FMS 레이아웃 에디터에서 위치 노드와 연결하지 않고 랙 상자만 놓은 경우다.
+ */
+export type LayoutObjectRack = {
+  locationId: number
+  name: string
+  code: string | null
+  rackUnits: number | null
+}
+
+/** `LayoutDtos.LayoutObject` — 배치도 위 오브젝트 1건. 바닥 점유는 **정확히 1타일**이다(§11-31 ②). */
+export type LayoutObject = {
+  /** `zone_layout_object.id` — 랙 위치 id 가 아니다. */
+  id: number
+  /**
+   * 팔레트 12종(§11-31 ①): `RACK CRAC UPS POWER FIRE WATER SENSOR CCTV DOOR GATE GAS SEISMIC`.
+   *
+   * **유니온이 아니라 `string` 인 것은 의도다.** FMS 가 종류를 늘려도 rack3d 가 깨지면 안 되므로
+   * 모르는 값은 회색 박스로 흘려보낸다(`objectColor`/`objectHeightM` 참조).
+   */
+  type: string
+  /** 열(0-base). 오른쪽으로 증가 = EAST. */
+  x: number
+  /** 행(0-base). 아래로 증가 = SOUTH. */
+  z: number
+  dir: LayoutDirection
+  /** 사용자 지정 명칭. **빈 문자열일 수 있다** — 그때는 `type` 을 표시명으로 쓴다(§11-31 ①). */
+  label: string
+  rack: LayoutObjectRack | null
+  /** 자산 참조. 실측은 전부 `null` 이고 rack3d 는 쓰지 않는다 — 값을 읽지 말 것. */
+  asset: unknown
+}
+
+/**
+ * `GET /api/layouts/zones/{zoneId}/layout` (ASSET READ — FMS 가 SETTINGS 에서 완화해 줬다).
+ *
+ * **rack3d 는 GET 만 쓴다.** 좌표 편집은 netis-fms 레이아웃 설정에서만 한다(E18 ① 확정) —
+ * 편집 지점이 두 곳이면 어느 쪽이 정답인지 흐려진다. 그래서 `PUT` 도, SETTINGS WRITE 분기도 없다.
+ */
+export type ZoneLayout = {
+  zone: { id: number; name: string; code: string | null }
+  grid: LayoutGrid | null
+  objects: LayoutObject[]
+}
