@@ -870,3 +870,33 @@ DB·코드로 확정했다:
 **스코프 좁힌 계정**: 계약은 위처럼 증명됐으니 필수는 아니지만, 직접 404를 보고 싶으면 단일 ZONE 스코프 계정을 만들어 주겠다 — MFA off 개발계정이 하나 더 느는 거라 제품 오너 확인 후 발급한다(지금 묻는 중). 급하지 않다니 원하면 말해달라.
 
 rack3d 배포 준비되면 §11-5에 이미지 태그 남겨라 — 그때 nginx `/rack3d/` 프록시(서비스 rack3d-web-np:80, 게이트/fallback 없음, proxy_hide_header 6종 + FMS 스니펫) + 상단 "3D 관제" 메뉴 붙이고 실동작 확인 후 Cloudflare 도메인 폐쇄 신호 주겠다.
+
+### 11-22. rack3d 배포 완료 — 이미지 태그 `main-1ef8b9d` (2026-08-22, rack3d PM)
+
+§11-5 (7)에서 약속한 배포 태그다. **프록시·메뉴를 붙여도 되는 상태다.**
+
+| 항목 | 값 |
+|---|---|
+| 이미지 | `10.1.20.21:5000/rack3d-web:main-1ef8b9d` (`latest` 동시 태깅) |
+| 커밋 | `1ef8b9d` (직전 운영본은 `main-5498a07` — 이번 연동 작업 착수 전 버전이었다) |
+| 네임스페이스 / Deployment / Service | `rack3d` / `rack3d-web` / **`rack3d-web-np`** (NodePort 30303, targetPort 80) |
+| 클러스터 내부 FQDN | `rack3d-web-np.rack3d.svc.cluster.local:80` |
+| 롤아웃 | 무중단 롤링 완료, 재시작 0 |
+
+**스모크(노드포트 직접)**
+```
+GET http://10.1.20.21:30303/                        → 200   (접두사 제거 프록시 대비)
+GET http://10.1.20.21:30303/rack3d/                 → 200   (접두사 유지 프록시 대비)
+GET http://10.1.20.21:30303/rack3d/models/rack-42u.glb → 200
+헤더: Server: nginx(버전 없음) · X-Content-Type-Options · X-Frame-Options: DENY
+      · Referrer-Policy · Strict-Transport-Security · Content-Security-Policy(전체 정책)
+```
+§11-5 (2)에서 말한 대로 **접두사 유지·제거 두 형태 모두** 200 이다. FMS 편한 쪽으로 고르면 된다.
+
+**⚠️ 지금은 화면이 로그인 안내에서 멈추는 것이 정상이다.** NodePort 로 직접 열면 rack3d 는 자기 오리진의 `/api` 를 부르는데 rack3d nginx 에는 `/api` 가 없다. `POST /api/auth/refresh` 가 실패해 "세션이 만료되었습니다" 화면이 뜬다. **FMS nginx 가 `/rack3d/` 를 프록시해 같은 오리진이 되는 순간 정상 동작한다**(D4). 즉 이 화면은 결함이 아니라 프록시 연결 전의 예상 상태다.
+
+**이번 배포에 들어간 것** — 1단계(인증·통신 기반 + 전산실·랙 목록) · 2단계(랙 내부 장비 u맵 + 토큰 선제 갱신 + `ServerStatus` 삭제 + 라벨 3계층 분리 + 가짜 온도 시계열 제거) · 3단계(ZONE 배치 전환 + 폴링 정책 분리). 리뷰 4라운드·QA 2라운드를 거쳤고 마지막 QA 는 실 FMS 에 붙여 검증했다.
+
+**붙일 때 지켜야 할 것**(§11-6 에서 합의한 그대로) — 게이트 없이 프록시 통과만 · SPA fallback 은 rack3d 컨테이너에 맡기고 FMS 는 걸지 않음 · `Cache-Control` 덮어쓰지 않음 · 보안 헤더 6종은 `proxy_hide_header` 후 FMS 스니펫 include · XFF 치환 규약 준수.
+
+붙인 뒤 `https://fms.burunet.co.kr/rack3d/` 로 실동작 확인해 주면, 그다음이 `rack3d.burunet.co.kr` 폐쇄 신호다(§11-4 순서).
