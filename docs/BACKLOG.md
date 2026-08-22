@@ -4,15 +4,26 @@
 
 ## 할 일
 
-- [ ] 🛠 netis-fms 실연동 2단계 — 랙 내부 장비(u맵) + 확정 대시보드 UI
-  - `GET /api/racks/{id}/u-map` 연동 → 서버 목록·U맵·장비 타입별 대수
-  - 대시보드를 FMS 가능 데이터 기준으로 재구성 (D2 — 확정 시안은 참고 기준)
-  - `createTemperatureHistory` 제거 (E19 B4 `series/zone` 연동으로 대체)
-  - ⚠️ `RackUnitMap`이 `totalUnits` 폴백(42)을 쓴다 — u맵이 붙는 순간 크기 미설정 랙에서 `1U–42U`로 샌다. `rackUnits` 원값을 받아 미설정이면 U맵을 그리지 말 것 (`src/App.tsx` ⚠️ 주석 참조)
+- [ ] 🛠 netis-fms 실연동 3단계 — ZONE 일괄 u맵 전환 + 폴링 정책 분리
+  - **A. `GET /api/zones/{zoneId}/u-maps` 전환** (FMS 구현 중, 배포 시 태그 공유 예정)
+    - `src/hooks/useRackUMaps.ts` **파일 전체(220줄)** → `usePolledResource(fetchZoneUMaps, …)` 로 대체. 커서·요청 간격·스윕 주기·재시도 스윕·중복 가드·`pruneCollection`·정렬 키·`failedRackIds`(부분 실패 개념 자체가 사라짐)가 전부 불필요
+    - `fetchRackUMap` → `fetchZoneUMaps(zoneId)`, `App.tsx` 의 `uMapRackIds`·u맵 실패 분기 → 폴링 훅의 `failure` 하나로 수렴
+    - 남는 것: `RackData.uMapKnown`("0대"와 "모름" 구분은 계속 필요), `toServerList`, `pickServerModel`, `getFreeUnitBlocks`
+  - **B. 폴링 정책 분리** (FMS 추가 요청 불필요 — 이미 API 가 성격별로 나뉘어 있는데 우리가 잘못 쓰고 있었다)
+    - 텔레메트리(`/zones/{id}/racks` — 온습도·전력·등급) 30초 폴링 유지 / **구조(u맵)는 ZONE 진입 시 1회**. 현재의 300초 전량 재수집 제거
+    - 갱신 트리거: 랙 목록의 `assetCount`·`categoryCounts`·`rackUnits` 를 **값 비교**해 달라지면 그때만 재수집 → 반영이 최대 300초에서 **30초 이내로 빨라진다**
+    - 한계(문서화): 같은 수로 교체(1대 빼고 1대 추가)되면 감지 안 됨. 관제 화면에서 장비 교체가 30초 안에 반영될 이유는 없어 감수
+    - 함께: **수동 "지금 새로고침"이 u맵을 커버하지 않는다** — 진입 1회 방식이 되면 강제 갱신 수단의 필요성이 커진다
+- [ ] 🛠 확정 대시보드 UI 재구현 — FMS 가능 데이터 기준(D2)
+  - `series/zone`(E19 B4) 연동으로 온습도 트렌드 카드 채우기 → 이때 echarts 복원(Q3)
+  - 시설 6종·KPI 5카드를 §4 매트릭스의 ✅ 항목으로 재구성
+- [ ] 3D 랙 형상이 항상 42U GLB다 — `rackUnits` 가 20U·48U 인 랙도 42U 프레임으로 그려지고 `rackEndU > 42` 자산은 프레임을 뚫는다(`rackLayouts.ts` `toServerData` 가 상한 미검사). 실고객 데이터에 42U 아닌 랙이 오면 드러난다
 - [ ] `LIVE` 뱃지가 "응답은 오는데 값이 낡은 경우"를 못 잡는다
   - 현재 판정은 `failure`/`lastUpdatedAt`(rack3d가 응답 받은 시각)만 본다. FMS가 stale 데이터를 200으로 주면 여전히 `LIVE`
   - FMS 랙 목록 DTO에 `stale`(통신두절 센서 존재)·`collectedAt`(측정 수신 시각)이 있다. 이 둘로 판정하면 렌더 중 시계를 읽지 않고(purity 유지) 해결된다. 랙 상세는 이미 표시 중이라 집계만 올리면 됨
-- [ ] 백오프 상한 300초가 FMS 실제 레이트리밋 창과 맞는지 확인 (현재 임의 선택값)
+- [x] ~~백오프 상한 300초가 FMS 레이트리밋 창과 맞는지 확인~~ → **해소(2026-08-22).** FMS 회신 §11-16: rack3d 가 쓰는 조회 계열·`/api/auth/refresh` 에 레이트리밋이 **전혀 없다**(`RateLimiterService` 는 전역 필터가 아니라 명시 호출 구조이고 조회 서비스는 호출 0, nginx 계층도 없음). 문서의 30회/분은 로그인 전용이었다
+  - 코드 주석 5곳의 근거를 정정했다. **결론(재시도 1회 상한·single-flight·수동 재시도 쿨다운)은 유지** — 무한 재시도는 레이트리밋과 무관하게 잘못된 동작이다
+  - ⚠️ `fms-integration-security.md` §13 의 리스크 **R6 서술은 근거가 뒤집혔다**. 문서 정리 시 반영할 것
 - [ ] accessToken 선제 갱신 — `TokenResponse.expiresInSeconds`(현재 타입에만 있고 미사용, `src/api/client.ts:25`)로 만료 60초 전 자동 refresh 예약
   - 401 반응 재시도(②)는 이미 있으므로 **정합성 장치가 아니라 401 왕복을 줄이는 최적화**다
   - ⚠️ C11(탭 비활성 시 폴링 중단)과 충돌한다 — 타이머를 그냥 걸면 숨긴 탭에서도 14분마다 refresh 가 나간다. 탭이 보이는 동안만 예약하고, 복귀 시 남은 수명이 임계 이하면 즉시 갱신하는 방식으로 (§11-8)
@@ -32,6 +43,17 @@
   - ⚠️ 테스트 이미지는 160×320(세로가 긴 비율)이라 랙 규격(1U≈10:1)과 어긋난다. 실 장비 정면 크롭이 들어와야 제대로 보인다(R5)
 
 ## 완료
+
+- [x] 2026-08-22 netis-fms 실연동 2단계 — 랙 내부 장비(u맵) + 토큰 선제 갱신
+  - `GET /api/racks/{id}/u-map` 연동 → 랙 안에 자산이 실제 U 위치로 렌더된다. `rackStartU`~`rackEndU`, 3D 형상은 GLB 3종 근사 + **Y축을 `units / 모델고유U` 배로 스케일**해 U 점유는 실데이터와 정확히 일치(4U 자산 실측 확인)
+  - **`ServerStatus`(healthy/warning/critical/offline) 타입째 삭제** — FMS 에 IT 장비 텔레메트리가 없어 그 색은 시드로 지어낸 값이었다. `lifecycleStatus` 는 중립 배지 원값만(C6). 랙 단위 경보는 FMS `severity` 실값이라 유지
+  - **`assetCount`(U 배정) vs `categoryCounts`(랙 내 전체) 라벨 분리** — 3계층 어휘 통일: 로비 `ZONE ASSETS` ⊇ 상단바 `IN RACKS` ⊇ `MOUNTED`. FMS 가 §11-11 로 정의를 확정해 준 건이고, 랙 17(`assetCount 4` vs 합 5)로 실데이터 검증
+  - **가짜 온도 시계열 제거**(D3·Q5-b) — 카드는 자리만 남기고 `—` + `미연동 · E19 B4` + 출처 표기. 부수 효과로 echarts 참조가 0 이 되어 **번들 JS 1,823 → 1,306 kB(−28%, gzip −32%)**
+  - **echarts 의존성 제거** — 설치 용량 −61.6MB(echarts 57.5 + zrender 4.1), lock 243 → 239. 대시보드 재구현 시 복원(`npm i echarts`, Q3 결정 유지). *번들 감소는 코드 제거의 몫이고 패키지 제거의 몫은 설치 용량·공급망 표면이다 — 별개다*
+  - `SidebarNode.code` optional 정정(실응답 대조 §11-10), accessToken 선제 갱신(탭 가시성 연동 — FMS 프론트의 평이한 setTimeout 방식은 C11 과 충돌해 채택하지 않음)
+  - 리뷰 지적 🔴 2 + 🟡 7 처리: **스윕 중 3D 조작 불능**(랙 배열 신원 churn → 카메라 전이 무한 리셋, 랙 36대면 18초 · 300초마다 반복)을 `CameraController` 의존성을 스칼라로 바꿔 해소. 랙 캐시를 끈 격리 검증으로 확인
+  - 실 FMS(`rack3d-dev` 계정)로 검증. 이전 단계까지는 전부 문서 기반 스텁이었다
+
 
 - [x] 2026-08-22 커밋 전 기계적 검증을 훅으로 이관 — 리뷰·QA 토큰 절감
   - `.claude/hooks/pre-commit-checks.sh` + `.claude/settings.json`(PreToolUse: Bash → `git commit` 가로채기)
