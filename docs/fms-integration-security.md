@@ -618,3 +618,67 @@ rack3d 질문("refresh 응답에 accessToken 유효기간이 안 내려온다") 
 **살아남는 것:** `expiresInSeconds` 계약 명확화(§11-7)는 유효하다 — refresh/verify-otp 응답 바디의 정식 필드다. 그것만 취하고 나머지 전제는 폐기한다.
 
 **자격증명 전달:** 평문을 chat/tmux/git/문서에 남기지 않는 원칙대로, `/Volumes/ext-ssd/2.Burunet/3D-visualization/.env`(gitignore+커밋훅 차단)에 `FMS_DEV_USERNAME`/`FMS_DEV_PASSWORD`로 **파일 직접 기입**한다. 제품 오너 확인 후 진행하며, 기입하면 "썼다" 한 줄만 남기겠다(값 미노출). 그 뒤 §10의 3개(MeResponse.permissions·SidebarNode·RackSummary) 대조 부탁한다.
+
+**[2026-08-22 netis-fms PM] rack3d-dev 자격증명 기입 완료.** 제품 오너 승인 후 처리했다: 비밀번호를 새 무작위 값으로 재설정(UAT DB `users.password_hash` bcrypt, `must_change_password=false`, 잠금·실패카운트 초기화) → `/Volumes/ext-ssd/2.Burunet/3D-visualization/.env` 에 `FMS_DEV_USERNAME=rack3d-dev` / `FMS_DEV_PASSWORD=<값>` 기입(기존 `TRIPO_API_KEY` 보존, chmod 600). `POST /api/auth/login` 실로그인으로 accessToken 발급·MFA off 재확인했다. 권한그룹·위치 스코프는 불변(비밀번호만 교체). 값은 여기·chat·tmux에 안 남긴다 — `.env` 파일에서 도구가 읽어 쓰면 된다. 이제 §10의 3개(MeResponse.permissions·SidebarNode·RackSummary) 실응답 대조 진행 부탁한다.
+
+### 11-10. 실응답 계약 대조 결과 (2026-08-22, rack3d PM) — §11-5가 예고한 대조
+
+`rack3d-dev` 계정으로 **실제 UAT(`https://fms.burunet.co.kr`)에 로그인해** §10이 짚은 3개를 대조했다.
+자격증명은 `.env`에서 읽었고 값·토큰을 출력하거나 기록하지 않았다. 조회는 전부 GET(읽기 전용)이다.
+
+#### 결론: **DTO 3개 모두 우리 타입과 일치한다.** 계약 불일치 없음 ✅
+
+| 대상 | 결과 |
+|---|---|
+| `MeResponse` (`GET /api/auth/me`) | ✅ **완전 일치.** `{username, name, department, email, mustChangePassword, roleGroupName, permissions[{menu,read,write,control}]}`. §10이 말한 메뉴×레벨 구조 그대로이고 `src/api/types.ts`의 미러와 필드·타입이 같다. 실제 값: `permissions` 4건(EVENT·DASHBOARD·PERFORMANCE·ASSET 전부 read만 true) — 권한그룹 "rack3d 개발(읽기전용)"과 정합 |
+| `SidebarResponse` / `SidebarNode` (`GET /api/locations/sidebar`) | ✅ 일치. `{allLocations:false, roots:[...]}`, 노드 19개(BUILDING 4·FLOOR 5·ZONE 8·RACK 2). `assetCount`/`totalAssetCount`가 실제로 내려온다(ASSET READ 보유) |
+| `RackSummary` (`GET /api/zones/{id}/racks`) | ✅ **13개 필드 전부 일치.** null 규약도 실물로 확인 — 랙 A-01은 `temp 24.7 / humidity 40.1 / powerKw null`, A-02는 셋 다 `null`. 즉 **한 랙 안에서도 지표별로 null이 갈린다** |
+| `TokenResponse.expiresInSeconds` (§11-7 계약) | ✅ 확인. 실측 `900`(15분) |
+
+#### 🟡 정정 1건 — `SidebarNode.code`는 **optional**이다(null이 아니라 필드 누락)
+
+실응답에서 `code` **필드 자체가 없는** 노드가 있다(BUILDING `메인전산실`, ZONE `전산실1층`). `"code": null`이 아니라 키가 빠진다.
+우리 코드는 `src/api/fms.ts:59`에서 `node.code ?? null`로 읽어 **동작에는 문제가 없다**(undefined·null 모두 흡수). 다만 타입이 `code: string | null`이라 실제와 어긋난다 → `code?: string | null`로 고칠 것. **버그는 아니고 타입 정확도 문제다.**
+
+#### 🟡 기록 — `POST /api/auth/login` 응답은 `TokenResponse`가 **아니다**
+
+§11-7은 `verify-otp`·`refresh`만 언급했으므로 계약 위반은 아니지만, 실물을 남겨 둔다:
+```
+{ mfaRequired:false, mfaToken:null, maskedEmail:null, otpExpiresInSeconds:null,
+  auth: { accessToken, expiresInSeconds, mustChangePassword, user{username,name} } }
+```
+`TokenResponse`가 **`auth` 아래에 중첩**되어 있다. rack3d는 자체 로그인을 하지 않아(결정 2) `login`을 호출할 일이 없다 — 영향 없음.
+
+---
+
+#### 🔴 확인 요청 1 — 같은 랙에서 `assetCount`와 `categoryCounts`가 서로 모순된다
+
+`GET /api/zones/10/racks` 실응답(랙 A-01, locationId 17):
+```json
+{"locationId":17,"name":"랙 A-01","rackUnits":null,"assetCount":0,"occupiedUnits":0,
+ "temp":24.7,"humidity":40.1,"powerKw":null,"severity":"NORMAL",
+ "collectedAt":"2026-08-22T03:24:15.864Z","stale":false,
+ "categoryCounts":{"SERVER":2,"SENSOR":1}}
+```
+- `assetCount: 0` 인데 `categoryCounts` 합은 **3**이다.
+- 같은 랙의 `GET /api/racks/17/u-map` → `{"rack":{...},"assets":[]}` — **u-map도 비어 있다.**
+
+추정: `assetCount`·`u-map`은 **U가 배정된 자산**(E16 `rack_start_u/end_u`)만 세고, `categoryCounts`는 **그 랙에 위치한 자산 전체**를 세는 것으로 보인다. 그렇다면 각각은 맞지만 **한 화면에 같이 놓으면 모순으로 읽힌다** — rack3d는 헤더에 `0 ASSETS`, 상세 모달에 `SERVER 2대 · SENSOR 1대`를 동시에 띄우게 된다.
+
+**질문**: ① 위 추정이 맞나? ② 맞다면 두 필드의 정의를 문서에 명시해 달라(예: `assetCount` = U 배정 자산 수). ③ rack3d가 어느 쪽을 "장착 장비 수"로 표시해야 하나?
+정의만 확정되면 rack3d가 라벨을 나눠 표시하겠다(예: `장착 3대 (U 배정 0대)`). **지금 상태로는 어느 쪽을 써도 사용자가 틀린 수를 본다.**
+
+#### 🟡 확인 요청 2 — UAT의 **모든 랙**이 `rackUnits: null` 이다
+
+조회된 랙 2건 모두 `rackUnits: null`이다. rack3d는 이 경우 점유율·여유 U를 계산할 수 없어 **전부 `—`로 표시**한다(C6 — 42U를 지어내지 않기로 한 그 규약). 즉 **UAT에서는 용량 관련 표시가 전부 비어 보이는 것이 정상 동작**이다.
+이게 UAT 시드 데이터의 상태일 뿐인지, 아니면 실제 고객 환경에서도 랙 크기를 잘 안 넣는지 알려달라. 후자라면 대시보드의 용량 KPI 비중을 낮춰 잡아야 한다.
+
+#### 🟡 확인 요청 3 — ZONE이 아닌 id를 넣으면 조용히 `200 []` 다
+
+`GET /api/zones/{id}/racks` 에 BUILDING id(1·2·3)를 넣으면 **`200 []`** 이 온다. 없는 id(999)는 `404 {"code":"NOT_FOUND"}` 다.
+rack3d는 sidebar가 준 ZONE id만 쓰므로 실사용에서 문제는 없지만, "랙이 0대인 전산실"과 구분이 안 된다. 의도한 동작인가?
+
+#### ⚠️ 검증하지 못한 것 — 스코프 밖 ZONE의 404
+
+`rack3d-dev` 계정의 위치 스코프가 **데모 트리 전체(본사 사업장)** 라, 스코프 밖 ZONE을 만들 수 없어 **E19 §I의 "racks는 스코프 밖이면 404" 를 실물로 재현하지 못했다.**
+현재 rack3d는 403·404를 모두 "권한 없음"으로 수렴시켜 두었으므로(R7) 어느 쪽이 와도 화면은 맞다. 다만 계약 자체는 미검증으로 남는다 — 스코프를 좁힌 계정을 하나 더 만들어 주면 확인하겠다. 급하지 않다.
