@@ -9,6 +9,8 @@
  *   탭 복귀는 남은 시간만큼 미뤄 예약한다. 사용자가 누르는 재시도만 예외로 백오프를 넘되,
  *   {@link MANUAL_RETRY_COOLDOWN_MS} 쿨다운이 걸려 연타가 요청 폭주가 되지 않는다.
  * - C11: 탭이 비활성이면 폴링을 멈춘다. 복귀 시 하한을 지키면서 재개한다.
+ * - `repeat: false`면 **성공 1회로 끝난다**(자동 재수집 없음). 자주 바뀌지 않는 자원을
+ *   화면 수명 내내 다시 받지 않기 위한 모드다 — 아래 {@link PolledOptions.repeat} 참조.
  * - C12: 세션이 끊기면 `session.stopAllPolling()`이 여기 등록된 정지 함수를 전부 호출한다.
  * - 요청 시퀀스: 겹쳐 시작된 요청 중 **가장 마지막에 시작한 것의 응답만** 반영한다.
  *   (탭 복귀·수동 새로고침으로 주기 밖 요청이 끼어들면 먼저 시작한 느린 응답이 나중에
@@ -36,8 +38,12 @@ export type PolledResource<T> = PolledState<T> & {
    *
    * **백오프는 무시하되 연타는 막는다.** 백오프를 못 넘으면 길게 잡힌 재시도 대기에서
    * F5 말고 복구 수단이 없고, 하한까지 통째로 지우면 즉답 실패(404·429)에서 연타가
-   * 그대로 요청 폭주가 된다 — FMS 레이트리밋(IP 30회/분)을 소진하면 같은 NAT의 다른
-   * 사용자까지 막힌다(R6). 그래서 {@link MANUAL_RETRY_COOLDOWN_MS} 간격만 허용한다.
+   * 그대로 요청 폭주가 된다. 그래서 {@link MANUAL_RETRY_COOLDOWN_MS} 간격만 허용한다.
+   *
+   * ⚠️ **근거는 레이트리밋이 아니다.** FMS 조회 계열에는 레이트리밋이 없고(§11-16),
+   * 문서에 있던 "IP 30회/분"은 로그인 전용이다. 즉답으로 실패하는 요청을 사람이 누르는
+   * 속도만큼 계속 보내는 것은 **제한이 있든 없든 잘못된 동작**이다 — 실패를 실패로 처리하지
+   * 않는 것이고, 그동안 FMS 서버와 단말의 트래픽·배터리만 태운다.
    */
   retryNow: () => void
 }
@@ -45,21 +51,42 @@ export type PolledResource<T> = PolledState<T> & {
 /**
  * 수동 재시도 최소 간격.
  *
- * 자동 폴링이 30초이므로 5초면 사람이 계속 눌러도 분당 12회가 상한이다 —
- * FMS 레이트리밋(30회/분)의 절반 이하로, 여러 탭이 겹쳐도 여유가 남는다.
- * 반대로 5초는 "고장 났나?" 하고 다시 눌러보는 사람에게 답답하지 않은 정도다.
+ * 자동 폴링이 30초이므로 5초면 사람이 계속 눌러도 분당 12회가 상한이다. 반대로 5초는
+ * "고장 났나?" 하고 다시 눌러보는 사람에게 답답하지 않은 정도다.
+ *
+ * ⚠️ **"FMS 레이트리밋 30회/분의 절반"이라는 근거로 정한 값이 아니다** — 그 제한은 로그인
+ * 전용이고 조회 계열에는 제한이 없다(§11-16). 제한이 없다는 것을 이유로 이 상한을 없애지 말 것:
+ * 연타가 그대로 요청 폭주가 되는 것은 제한 유무와 무관한 문제다.
  */
 export const MANUAL_RETRY_COOLDOWN_MS = 5_000
+
+export type PolledOptions = {
+  /**
+   * 성공한 뒤에도 계속 다시 받을 것인가. 기본 `true`(주기 폴링).
+   *
+   * `false`면 **성공하는 순간 자동 요청 경로가 전부 닫힌다** — 주기 타이머도, 탭 복귀 갱신도
+   * 걸지 않는다. 다시 받는 방법은 두 가지뿐이다: `fetcher` 동일성이 바뀌거나(대상 전환),
+   * 사용자가 {@link PolledResource.retryNow}를 누르거나.
+   *
+   * **실패는 예외로 계속 재시도한다.** "1회 받는다"는 *성공적으로* 1회라는 뜻이고, 실패한
+   * 요청은 아직 그 1회를 못 받은 것이기 때문이다. 진입 직후의 일시적 단절 하나로 화면이
+   * 영구히 빈 채 남지 않게 한다. (재시도 간격은 `intervalMs`와 429 `Retry-After`를 따른다.)
+   */
+  repeat?: boolean
+}
 
 /**
  * @param fetcher 호출부에서 `useCallback`/`useMemo`로 감싸 넘길 것 — 이 함수의 동일성이
  *                폴링 주기를 다시 시작하는 기준이다. `null`이면 폴링하지 않는다(전산실 미선택 등).
  * @param intervalMs 폴링 주기(ms). 두 갱신 사이의 최소 간격이기도 하다.
+ *                   `repeat: false`면 **실패 재시도 간격**으로만 쓰인다.
  */
 export function usePolledResource<T>(
   fetcher: (() => Promise<T>) | null,
   intervalMs: number,
+  options?: PolledOptions,
 ): PolledResource<T> {
+  const repeat = options?.repeat ?? true
   const idleState: PolledState<T> = {
     data: null, failure: null, loading: false, lastUpdatedAt: null, nextAttemptAt: null,
   }
@@ -93,6 +120,11 @@ export function usePolledResource<T>(
 
     let cancelled = false
     let timer: number | null = null
+    /**
+     * `repeat: false`에서 **성공을 받아 더 이상 자동으로 요청하지 않는 상태**.
+     * 예약도, 탭 복귀 갱신도 여기서 막는다. 사용자의 `retryNow`만 이 상태를 넘는다.
+     */
+    let settled = false
     /** 시작한 요청의 일련번호. 응답이 최신 번호가 아니면 폐기한다. */
     let sequence = 0
     let latestSequence = 0
@@ -118,6 +150,11 @@ export function usePolledResource<T>(
     /** 하한·백오프를 지켜 다음 실행을 예약한다. */
     const scheduleNext = () => {
       clearTimer()
+      // 성공으로 끝난 1회성 자원은 다음 실행을 잡지 않는다(자동 재수집 경로 없음).
+      if (settled) {
+        setState((previous) => ({ ...previous, nextAttemptAt: null }))
+        return
+      }
       // C11 — 보이지 않는 탭에서는 예약하지 않는다. 복귀 시 visibilitychange가 다시 돌린다.
       if (cancelled || document.visibilityState === 'hidden') {
         setState((previous) => ({ ...previous, nextAttemptAt: null }))
@@ -140,11 +177,13 @@ export function usePolledResource<T>(
         // 성공하면 백오프를 해제한다 — 서버가 회복했는데 옛 Retry-After를 계속 붙들고 있으면
         // 정상 복구 후에도 화면이 계속 멈춰 있다.
         backoffUntil = 0
+        if (!repeat) settled = true
         setState({ data, failure: null, loading: false, lastUpdatedAt: new Date(), nextAttemptAt: null })
       } catch (error) {
         if (cancelled || mySequence !== latestSequence) return
         const failure = describeFailure(error)
-        // 429 Retry-After를 그대로 따른다(I-7). 이걸 무시하면 레이트리밋을 더 오래 물게 된다.
+        // 429가 오면 Retry-After를 그대로 따른다(I-7). 조회 계열에 현재 레이트리밋은 없지만
+        // 프록시·게이트웨이가 끼면 여전히 올 수 있는 응답이고, 무시하면 더 오래 물게 된다.
         if (failure.retryAfterMs !== null) backoffUntil = Date.now() + failure.retryAfterMs
         // 실패해도 직전 데이터는 남긴다 — 화면이 갑자기 비는 것보다 "갱신 실패" 표시가 낫다.
         setState((previous) => ({ ...previous, failure, loading: false }))
@@ -160,7 +199,7 @@ export function usePolledResource<T>(
      * (사용자가 누르는 재시도는 {@link forceRun} 쪽이며, 백오프만 넘고 쿨다운은 지킨다.)
      */
     const requestRun = () => {
-      if (cancelled) return
+      if (cancelled || settled) return
       if (remainingDelay() === 0) {
         void run()
         return
@@ -176,6 +215,9 @@ export function usePolledResource<T>(
       if (cancelled) return
       if (Date.now() - lastStartedAt < MANUAL_RETRY_COOLDOWN_MS) return
       backoffUntil = 0
+      // 사용자가 명시적으로 누른 갱신은 1회성 자원의 "끝남" 상태도 넘는다 —
+      // `repeat: false` 자원에서는 이게 **유일한 수동 갱신 수단**이다.
+      settled = false
       void run()
     }
 
@@ -201,7 +243,7 @@ export function usePolledResource<T>(
       unregister()
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [fetcher, intervalMs])
+  }, [fetcher, intervalMs, repeat])
 
   const refresh = useCallback(() => runRef.current(), [])
   const retryNow = useCallback(() => forceRunRef.current(), [])

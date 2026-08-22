@@ -1,33 +1,34 @@
-import { Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { ContactShadows, Environment, Html, Lightformer, OrbitControls, useCursor, useGLTF } from '@react-three/drei'
-import * as echarts from 'echarts/core'
-import type { EChartsCoreOption } from 'echarts/core'
-import { LineChart } from 'echarts/charts'
-import { AriaComponent, GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
 import * as THREE from 'three'
 import type { Group } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import LayoutEditor from './LayoutEditor'
-import { buildRacksFromZone, loadRackPlacements, rackElementId } from './rackLayouts'
-import type { RackPlacement } from './rackLayouts'
-import type { RackData, ServerData, ServerModel, ServerStatus } from './rackLayouts'
-import { collectZones, fetchSidebar, fetchZoneRacks, type ZoneSummary } from './api/fms'
-import type { MeResponse, RackSummary, RackSeverity } from './api/types'
+import { SERVER_MODEL_UNITS, buildRacksFromZone, loadRackPlacements, rackElementId, reuseUnchangedRacks } from './rackLayouts'
+import type { RackCacheEntry, RackPlacement } from './rackLayouts'
+import type { RackData, ServerData, ServerModel } from './rackLayouts'
+import { collectZones, fetchSidebar, fetchZoneRacks, fetchZoneUMaps, type ZoneSummary } from './api/fms'
+import type { MeResponse, RackSummary, RackSeverity, RackUMap } from './api/types'
 import { bootstrapSession, goToFmsLogin, goToFmsPasswordChange } from './api/session'
 import { MANUAL_RETRY_COOLDOWN_MS, usePolledResource } from './hooks/usePolledResource'
 import {
   NO_VALUE,
   aggregateZoneRacks,
   formatHeatmapValue,
+  getFreeUnitBlocks,
   getHeatmapDataset,
   heatmapModeMeta,
+  displayRackAssetCount,
   heatmapModes,
+  largestFreeBlock,
   rackAvailableUnits,
   rackOccupancyPercent,
+  severityToneColors,
+  severityTones,
+  unmountedAssetCount,
 } from './rackFigures'
-import type { HeatmapDataset, HeatmapMode, RackHeatmapVisual, ZoneAggregate } from './rackFigures'
+import type { HeatmapDataset, HeatmapMode, RackHeatmapVisual, SeverityTone, ZoneAggregate } from './rackFigures'
 import './App.css'
 
 /**
@@ -60,6 +61,12 @@ const RACK_POLL_INTERVAL_MS = 30_000
 /** 전산실(위치 트리) 목록은 거의 바뀌지 않는다 — 재시도 겸용으로 길게 잡는다. */
 const ZONE_POLL_INTERVAL_MS = 300_000
 
+/**
+ * 랙 U 배치(u맵) **실패 재시도** 간격. 성공하면 다시 받지 않으므로 폴링 주기가 아니다.
+ * 진입 직후의 일시적 단절 하나로 씬이 영구히 빈 채 남지 않게 하는 값이다.
+ */
+const UMAP_RETRY_INTERVAL_MS = 30_000
+
 
 const TILE_SIZE = 0.6
 const UNIT_HEIGHT = 0.04445
@@ -70,8 +77,6 @@ const RACK_FOCUS_HEIGHT = 1.06
 const RACK_FOCUS_DISTANCE = 1.15
 const OVERVIEW_CAMERA_POSITION = new THREE.Vector3(5.4, 2.2, 9.5)
 const OVERVIEW_CAMERA_TARGET = new THREE.Vector3(3.3, 0.9, 4.2)
-
-echarts.use([LineChart, AriaComponent, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
 type ThemeMode = 'dark' | 'light'
 
@@ -88,234 +93,71 @@ const severityLabels: Record<RackSeverity, string> = {
   CRITICAL: '심각',
 }
 
-const statusColors: Record<ServerStatus, string> = {
-  healthy: '#21e878', warning: '#ffc247', critical: '#ff3c56', offline: '#566174',
+/**
+ * 등급 라벨. **원값 폴백이 있는 이유**: `RackSeverity`는 우리 타입이지 서버 검증이 아니다(C5).
+ * FMS가 새 등급을 추가하면 인덱싱이 `undefined`가 되어 화면에서 등급 칸이 통째로 사라진다 —
+ * 그때는 모르는 원값이라도 보여주는 편이 맞다. 호출부마다 폴백을 붙였다 말았다 하지 않게 함수로 둔다.
+ */
+function severityLabel(severity: RackSeverity): string {
+  return severityLabels[severity] ?? severity
 }
 
+/**
+ * 우리 GLB 3종의 표시명 — **장비의 실제 모델명이 아니다.**
+ * FMS가 준 `modelName`/`manufacturer`가 화면에 나가는 값이고, 이 라벨은
+ * "3D 형상은 무엇으로 근사했는가"를 밝힐 때만 쓴다(형상 근사 고지).
+ */
 const serverModelLabels: Record<ServerModel, string> = {
   'dell-poweredge-r760': 'Dell PowerEdge R760',
   'hpe-proliant-dl360-gen11': 'HPE ProLiant DL360 Gen11',
   'cisco-ucs-c240-m7': 'Cisco UCS C240 M7',
 }
 
-type ServerActivityTone = 'normal' | 'warning' | 'critical'
-
-type ServerProfile = {
-  role: string
-  serialNumber: string
-  ipAddress: string
-  operatingSystem: string
-  cpuPercent: number
-  memoryPercent: number
-  storagePercent: number
-  temperatureCelsius: number
-  powerWatts: number
-  networkMbps: number
-  uptime: string
-  lastSync: string
-  activities: { time: string; message: string; tone: ServerActivityTone }[]
-}
-
-type IncidentRecord = {
-  detectedAt: string
-  duration: string
-  acknowledged: boolean
-  assignee: string
-  note: string
-}
-
-
-const serverProfiles: Record<string, ServerProfile> = {
-  'srv-001': {
-    role: 'Core API Gateway', serialNumber: 'HPE-SN-7A31K2', ipAddress: '10.24.11.21', operatingSystem: 'Ubuntu Server 24.04 LTS',
-    cpuPercent: 42, memoryPercent: 61, storagePercent: 48, temperatureCelsius: 39, powerWatts: 182, networkMbps: 684, uptime: '128d 07h', lastSync: '12 sec ago',
-    activities: [{ time: '10:42', message: 'Health check completed', tone: 'normal' }, { time: '08:15', message: 'Security patches verified', tone: 'normal' }],
-  },
-  'srv-002': {
-    role: 'Primary Database', serialNumber: 'DLL-SN-93R7M8', ipAddress: '10.24.11.31', operatingSystem: 'Rocky Linux 9.4',
-    cpuPercent: 58, memoryPercent: 74, storagePercent: 67, temperatureCelsius: 43, powerWatts: 421, networkMbps: 426, uptime: '214d 19h', lastSync: '9 sec ago',
-    activities: [{ time: '11:02', message: 'Replication lag 18 ms', tone: 'normal' }, { time: '06:30', message: 'Daily backup completed', tone: 'normal' }],
-  },
-  'srv-004': {
-    role: 'Web Frontend', serialNumber: 'HPE-SN-4F82P1', ipAddress: '10.24.12.41', operatingSystem: 'Ubuntu Server 22.04 LTS',
-    cpuPercent: 28, memoryPercent: 46, storagePercent: 39, temperatureCelsius: 36, powerWatts: 146, networkMbps: 812, uptime: '83d 04h', lastSync: '11 sec ago',
-    activities: [{ time: '10:58', message: 'Load balancer probe passed', tone: 'normal' }, { time: '09:21', message: 'Application deployment completed', tone: 'normal' }],
-  },
-  'srv-005': {
-    role: 'Web Frontend', serialNumber: 'HPE-SN-4F82P2', ipAddress: '10.24.12.42', operatingSystem: 'Ubuntu Server 22.04 LTS',
-    cpuPercent: 96, memoryPercent: 88, storagePercent: 72, temperatureCelsius: 72, powerWatts: 238, networkMbps: 1260, uptime: '2h 14m', lastSync: '4 sec ago',
-    activities: [{ time: '11:14', message: 'CPU temperature exceeded threshold', tone: 'critical' }, { time: '11:12', message: 'Application health check failed', tone: 'warning' }],
-  },
-  'srv-006': {
-    role: 'Compute Worker', serialNumber: 'DLL-SN-62W9C4', ipAddress: '10.24.12.61', operatingSystem: 'Ubuntu Server 24.04 LTS',
-    cpuPercent: 71, memoryPercent: 68, storagePercent: 52, temperatureCelsius: 51, powerWatts: 468, networkMbps: 536, uptime: '46d 12h', lastSync: '15 sec ago',
-    activities: [{ time: '10:50', message: 'Batch workload completed', tone: 'normal' }, { time: '07:40', message: 'Container image synchronized', tone: 'normal' }],
-  },
-  'srv-007': {
-    role: 'Backup Repository', serialNumber: 'CSC-SN-2Q18B7', ipAddress: '10.24.21.71', operatingSystem: 'VMware ESXi 8.0 U3',
-    cpuPercent: 0, memoryPercent: 0, storagePercent: 81, temperatureCelsius: 24, powerWatts: 0, networkMbps: 0, uptime: 'OFFLINE · 18m', lastSync: '18 min ago',
-    activities: [{ time: '10:56', message: 'Management connection lost', tone: 'critical' }, { time: '10:55', message: 'Power feed telemetry unavailable', tone: 'warning' }],
-  },
-  'srv-008': {
-    role: 'Monitoring Collector', serialNumber: 'HPE-SN-8M44D6', ipAddress: '10.24.21.81', operatingSystem: 'Debian 12',
-    cpuPercent: 34, memoryPercent: 53, storagePercent: 44, temperatureCelsius: 37, powerWatts: 158, networkMbps: 278, uptime: '167d 02h', lastSync: '6 sec ago',
-    activities: [{ time: '11:10', message: 'Metrics batch ingested', tone: 'normal' }, { time: '10:00', message: 'Alert rules synchronized', tone: 'normal' }],
-  },
-  'srv-009': {
-    role: 'GPU Compute Worker', serialNumber: 'DLL-SN-77G2X9', ipAddress: '10.24.22.91', operatingSystem: 'Ubuntu Server 22.04 · CUDA 12.5',
-    cpuPercent: 88, memoryPercent: 82, storagePercent: 63, temperatureCelsius: 68, powerWatts: 612, networkMbps: 940, uptime: '31d 09h', lastSync: '7 sec ago',
-    activities: [{ time: '11:08', message: 'GPU temperature approaching limit', tone: 'warning' }, { time: '10:44', message: 'Training workload started', tone: 'normal' }],
-  },
-  'srv-010': {
-    role: 'Network Services', serialNumber: 'HPE-SN-5N61T3', ipAddress: '10.24.22.10', operatingSystem: 'Rocky Linux 9.4',
-    cpuPercent: 19, memoryPercent: 41, storagePercent: 33, temperatureCelsius: 35, powerWatts: 139, networkMbps: 142, uptime: '302d 17h', lastSync: '10 sec ago',
-    activities: [{ time: '11:00', message: 'Routing table verified', tone: 'normal' }, { time: '09:30', message: 'DNS cache refreshed', tone: 'normal' }],
-  },
-  'srv-011': {
-    role: 'Object Storage', serialNumber: 'CSC-SN-9C53L8', ipAddress: '10.24.22.111', operatingSystem: 'Red Hat Enterprise Linux 9.4',
-    cpuPercent: 47, memoryPercent: 66, storagePercent: 78, temperatureCelsius: 45, powerWatts: 386, networkMbps: 615, uptime: '96d 21h', lastSync: '13 sec ago',
-    activities: [{ time: '10:48', message: 'Storage scrub completed', tone: 'normal' }, { time: '05:15', message: 'Capacity report generated', tone: 'normal' }],
-  },
-}
-
-const initialIncidentRecords: Record<string, IncidentRecord> = {
-  'srv-005': {
-    detectedAt: '11:12', duration: '18m', acknowledged: false, assignee: 'UNASSIGNED',
-    note: 'CPU 온도 임계치 초과. 애플리케이션 상태 점검이 필요합니다.',
-  },
-  'srv-007': {
-    detectedAt: '10:56', duration: '18m', acknowledged: true, assignee: 'NOC L1',
-    note: '관리 네트워크 연결과 전원 텔레메트리를 확인 중입니다.',
-  },
-  'srv-009': {
-    detectedAt: '11:08', duration: '22m', acknowledged: true, assignee: 'PLATFORM',
-    note: 'GPU 온도 상승 추세를 관찰하고 워크로드 분산을 검토합니다.',
-  },
-}
-
-type RackMetrics = {
-  usedUnits: number
-  availableUnits: number
-  occupancyPercent: number
-  largestFreeBlock: number
-  alertCount: number
-  statusCounts: Record<ServerStatus, number>
-  orderedServers: ServerData[]
-}
-
-type DashboardRackMetric = {
-  rack: RackData
-  metrics: RackMetrics
-}
-
-type DashboardAlert = {
-  rack: RackData
-  server: ServerData
-  type: string
-}
-
-type DashboardMetrics = {
-  totalServers: number
-  totalUnits: number
-  usedUnits: number
-  availableUnits: number
-  occupancyPercent: number
-  alertCount: number
-  healthyPercent: number
-  statusCounts: Record<ServerStatus, number>
-  modelCounts: Record<ServerModel, number>
-  rackMetrics: DashboardRackMetric[]
-  alerts: DashboardAlert[]
-}
-
-type TemperatureHistoryPoint = {
-  time: string
-  roomAverageCelsius: number
-  rackCelsius: Record<string, number>
-}
-
-function getRackMetrics(rack: RackData): RackMetrics {
-  const occupied = Array.from({ length: rack.totalUnits }, () => false)
-  const statusCounts: Record<ServerStatus, number> = { healthy: 0, warning: 0, critical: 0, offline: 0 }
-
-  rack.servers.forEach((server) => {
-    const firstUnit = Math.max(1, server.startU)
-    const lastUnit = Math.min(rack.totalUnits, server.startU + server.units - 1)
-    for (let unit = firstUnit; unit <= lastUnit; unit += 1) occupied[unit - 1] = true
-    statusCounts[server.status] += 1
-  })
-
-  const usedUnits = occupied.filter(Boolean).length
-  let largestFreeBlock = 0
-  let currentFreeBlock = 0
-  occupied.forEach((isOccupied) => {
-    currentFreeBlock = isOccupied ? 0 : currentFreeBlock + 1
-    largestFreeBlock = Math.max(largestFreeBlock, currentFreeBlock)
-  })
-
-  return {
-    usedUnits,
-    availableUnits: rack.totalUnits - usedUnits,
-    occupancyPercent: rack.totalUnits > 0 ? usedUnits / rack.totalUnits * 100 : 0,
-    largestFreeBlock,
-    alertCount: rack.servers.length - statusCounts.healthy,
-    statusCounts,
-    orderedServers: [...rack.servers].sort((a, b) => b.startU - a.startU),
-  }
-}
-
+/**
+ * 장비 U 범위 표기(`U03–U06`). u맵 자산의 실제 높이를 그대로 쓴다 — 1·2U 고정이 아니다.
+ */
 function formatUnitRange(server: ServerData) {
   const first = `U${String(server.startU).padStart(2, '0')}`
   const lastU = server.startU + server.units - 1
   return server.units === 1 ? first : `${first}–U${String(lastU).padStart(2, '0')}`
 }
 
-function getFreeUnitBlocks(rack: RackData) {
-  const occupied = new Set<number>()
-  rack.servers.forEach((server) => {
-    for (let unit = server.startU; unit < server.startU + server.units; unit += 1) occupied.add(unit)
-  })
-
-  const blocks: { startU: number; units: number }[] = []
-  let startU: number | null = null
-  for (let unit = 1; unit <= rack.totalUnits + 1; unit += 1) {
-    const isFree = unit <= rack.totalUnits && !occupied.has(unit)
-    if (isFree && startU === null) startU = unit
-    if (!isFree && startU !== null) {
-      blocks.push({ startU, units: unit - startU })
-      startU = null
-    }
-  }
-  return blocks.sort((a, b) => b.startU - a.startU)
+/** 값이 없는 텍스트 필드는 지어내지 않고 `—`로 둔다(C6·C7). */
+function orDash(value: string | null | undefined) {
+  const text = value?.trim()
+  return text ? text : NO_VALUE
 }
 
+/**
+ * 랙 U 배치도.
+ *
+ * **`rackUnits`(FMS 원값)가 없으면 이 컴포넌트를 렌더하지 않는다** — 호출부에서 막고,
+ * 여기서도 방어한다. 예전에는 지오메트리용 폴백 42U를 그대로 그려 크기 미설정 랙에
+ * "1U–42U RACK MAP"이 떴다(백로그 ⚠️ 항목). 도면은 랙 크기를 안다고 단언하는 표현이라
+ * 모를 때는 아예 그리지 않는 것이 맞다(C6).
+ */
 function RackUnitMap({
   rack,
+  rackUnits,
   onSelectServer,
 }: {
   rack: RackData
+  rackUnits: number
   onSelectServer: (server: ServerData) => void
 }) {
-  const units = useMemo(() => Array.from({ length: rack.totalUnits }, (_, index) => rack.totalUnits - index), [rack.totalUnits])
-  const freeBlocks = useMemo(() => getFreeUnitBlocks(rack), [rack])
-  const orderedServers = useMemo(() => [...rack.servers].sort((a, b) => b.startU - a.startU), [rack.servers])
-  const rowForBlock = (startU: number, height: number) => rack.totalUnits - startU - height + 2
+  const units = useMemo(() => Array.from({ length: rackUnits }, (_, index) => rackUnits - index), [rackUnits])
+  const freeBlocks = useMemo(() => getFreeUnitBlocks(rack.servers, rackUnits) ?? [], [rack.servers, rackUnits])
+  const rowForBlock = (startU: number, height: number) => rackUnits - startU - height + 2
 
   return (
     <section className="rack-unit-map" aria-labelledby={`rack-unit-map-${rack.id}`}>
       <div className="rack-unit-map-heading">
-        {/*
-          ⚠️ **다음 단계 처리 필요**: `totalUnits`는 FMS `rackUnits` 미설정 시 42로 대체된 폴백이다.
-          지금은 이 컴포넌트가 `orderedServers.length > 0` 게이트 뒤에 있어 렌더되지 않지만,
-          u맵(`GET /api/racks/{id}/u-map`)이 붙는 순간 크기 미설정 랙에서 "1U–42U"로 새어 나간다.
-          그때 rackUnits 원값을 받아 미설정이면 U맵 자체를 그리지 않도록 바꿀 것.
-        */}
-        <div><span>PHYSICAL LAYOUT</span><strong id={`rack-unit-map-${rack.id}`}>1U–{rack.totalUnits}U RACK MAP</strong></div>
+        <div><span>PHYSICAL LAYOUT</span><strong id={`rack-unit-map-${rack.id}`}>1U–{rackUnits}U RACK MAP</strong></div>
         <small>FRONT VIEW</small>
       </div>
       <div
         className="rack-unit-map-grid"
-        style={{ gridTemplateRows: `repeat(${rack.totalUnits}, 15px)` }}
+        style={{ gridTemplateRows: `repeat(${rackUnits}, 15px)` }}
       >
         {units.flatMap((unit, index) => [
           <span className="rack-unit-number" style={{ gridColumn: 1, gridRow: index + 1 }} key={`label-${unit}`}>U{String(unit).padStart(2, '0')}</span>,
@@ -331,19 +173,19 @@ function RackUnitMap({
             {block.units >= 3 && <em>{block.units}U EMPTY</em>}
           </span>
         ))}
-        {orderedServers.map((server) => (
+        {rack.servers.map((server) => (
           <button
-            className={`rack-unit-device ${server.status}`}
+            className="rack-unit-device"
             style={{ gridColumn: 2, gridRow: `${rowForBlock(server.startU, server.units)} / span ${server.units}` }}
             data-units={server.units}
             type="button"
             key={server.id}
             onClick={() => onSelectServer(server)}
-            aria-label={`${server.name}, ${formatUnitRange(server)}, ${serverModelLabels[server.model]}, 상태 ${server.status}, 상세 보기`}
-            title={`${server.name} · ${formatUnitRange(server)} · ${server.status}`}
+            aria-label={`${server.name}, ${formatUnitRange(server)}, ${orDash(server.category)}, 상세 보기`}
+            title={`${server.name} · ${formatUnitRange(server)} · ${server.assetCode}`}
           >
-            <span><strong>{server.name}</strong><small>{serverModelLabels[server.model]}</small></span>
-            <em>{server.status}</em>
+            <span><strong>{server.name}</strong><small>{orDash(server.modelName)}</small></span>
+            <em>{server.units}U</em>
           </button>
         ))}
       </div>
@@ -352,153 +194,46 @@ function RackUnitMap({
   )
 }
 
-function getDashboardMetrics(rackData: RackData[]): DashboardMetrics {
-  const statusCounts: Record<ServerStatus, number> = { healthy: 0, warning: 0, critical: 0, offline: 0 }
-  const modelCounts: Record<ServerModel, number> = {
-    'dell-poweredge-r760': 0,
-    'hpe-proliant-dl360-gen11': 0,
-    'cisco-ucs-c240-m7': 0,
-  }
-  const incidentTypes: Record<Exclude<ServerStatus, 'healthy'>, string> = {
-    warning: 'HEALTH WARNING',
-    critical: 'SERVER FAULT',
-    offline: 'CONNECTION LOST',
-  }
-  const rackMetrics = rackData.map((rack) => ({ rack, metrics: getRackMetrics(rack) }))
-  const alerts: DashboardAlert[] = []
-
-  rackData.forEach((rack) => {
-    rack.servers.forEach((server) => {
-      statusCounts[server.status] += 1
-      modelCounts[server.model] += 1
-      if (server.status !== 'healthy') alerts.push({ rack, server, type: incidentTypes[server.status] })
-    })
-  })
-
-  const severityOrder: Record<ServerStatus, number> = { critical: 0, offline: 1, warning: 2, healthy: 3 }
-  alerts.sort((a, b) => severityOrder[a.server.status] - severityOrder[b.server.status])
-
-  const totalServers = rackData.reduce((total, rack) => total + rack.servers.length, 0)
-  const totalUnits = rackData.reduce((total, rack) => total + rack.totalUnits, 0)
-  const usedUnits = rackMetrics.reduce((total, item) => total + item.metrics.usedUnits, 0)
-
-  return {
-    totalServers,
-    totalUnits,
-    usedUnits,
-    availableUnits: totalUnits - usedUnits,
-    occupancyPercent: totalUnits > 0 ? usedUnits / totalUnits * 100 : 0,
-    alertCount: alerts.length,
-    healthyPercent: totalServers > 0 ? statusCounts.healthy / totalServers * 100 : 0,
-    statusCounts,
-    modelCounts,
-    rackMetrics,
-    alerts,
-  }
-}
-
-/**
- * ⚠️ 생성값(가짜) 기준 온도. 예전 하드코딩 전산실의 평균온도(21.4℃)를 그대로 옮겨 둔 것이며
- *    **실측이 아니다.** `createTemperatureHistory`와 함께 다음 단계에서 제거하고
- *    FMS `GET /api/performance/series/zone`(E19 B4)으로 대체한다.
- */
-const PLACEHOLDER_BASE_TEMPERATURE_C = 21.4
-
-/** 생성 차트가 그리는 익명 계열 수 — 생성기의 서로 다른 오프셋 프로파일 수와 같다. */
-const SAMPLE_SERIES_COUNT = 4
-
-/** ⚠️ 가짜 시계열 생성기 — D3 제거 대상. 화면에서 실측처럼 보이지 않게 하는 것이 다음 단계 과제. */
-function createTemperatureHistory(baseTemperatureCelsius: number, rackData: RackData[]): TemperatureHistoryPoint[] {
-  const now = new Date()
-  const lastDailyWave = Math.sin((23 - 7) / 24 * Math.PI * 2) * 0.65 + Math.cos(23 / 3) * 0.14
-  const baseOffsets = [-0.5, 0.8, -0.4, 0.1]
-  const waveWeights = [1, -0.5, -0.3, -0.2]
-
-  return Array.from({ length: 24 }, (_, index) => {
-    const timestamp = new Date(now)
-    timestamp.setMinutes(0, 0, 0)
-    timestamp.setHours(now.getHours() - (23 - index))
-    const dailyWave = Math.sin((index - 7) / 24 * Math.PI * 2) * 0.65 + Math.cos(index / 3) * 0.14
-    const targetAverage = baseTemperatureCelsius + dailyWave - lastDailyWave
-    const oscillation = Math.sin(index * 0.62) * 0.2
-    const rawOffsets = rackData.map((_, rackIndex) => (
-      (baseOffsets[rackIndex] ?? 0) + oscillation * (waveWeights[rackIndex] ?? 0)
-    ))
-    const offsetAverage = rawOffsets.length > 0
-      ? rawOffsets.reduce((sum, value) => sum + value, 0) / rawOffsets.length
-      : 0
-    const rackCelsius = Object.fromEntries(rackData.map((rack, rackIndex) => [
-      rack.id,
-      Number((targetAverage + rawOffsets[rackIndex] - offsetAverage).toFixed(1)),
-    ]))
-    const roomAverageCelsius = rackData.length > 0
-      ? Number((Object.values(rackCelsius).reduce((sum, value) => sum + value, 0) / rackData.length).toFixed(1))
-      : Number(targetAverage.toFixed(1))
-
-    return {
-      time: `${String(timestamp.getHours()).padStart(2, '0')}:00`,
-      roomAverageCelsius,
-      rackCelsius,
-    }
-  })
-}
-
-function cloneModel(scene: Group, status?: ServerStatus) {
+function cloneModel(scene: Group) {
   const clone = scene.clone(true)
   clone.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return
     child.castShadow = true
     child.receiveShadow = true
     child.material = child.material.clone()
-    if (status && child.name === 'Status_LED') {
-      const material = child.material as THREE.MeshStandardMaterial
-      material.color.set(statusColors[status])
-      material.emissive.set(statusColors[status])
-      material.emissiveIntensity = status === 'offline' ? 0.15 : 3
-    }
   })
   return clone
 }
 
+/**
+ * 랙 안의 장비 1대(netis-fms u맵 자산).
+ *
+ * **형상은 근사, 위치·높이는 실측이다.** GLB는 3종(dell 2U·hpe 1U·cisco 2U)뿐이므로
+ * 제조사/U 높이로 하나를 고른 뒤(`pickServerModel`) **Y축을 실제 U 높이에 맞춰 늘린다** —
+ * "몇 U를 먹는가"는 FMS 실데이터라 근사로 넘길 수 없다.
+ *
+ * 장비 상태 경보(깜빡임·비컨)는 없앴다. 소스가 없는데 색을 칠하면 가짜 정상/가짜 장애가 된다.
+ */
 function Server({
   server,
-  showAlert,
   selected,
   interactive,
   onSelect,
 }: {
   server: ServerData
-  showAlert: boolean
   selected: boolean
   interactive: boolean
   onSelect: (server: ServerData) => void
 }) {
   const modelUrl = assetUrl(`models/${server.model}.glb?v=${MODEL_VERSION}`)
   const { scene } = useGLTF(modelUrl, GLTF_USE_DRACO, GLTF_USE_MESHOPT)
-  const model = useMemo(() => cloneModel(scene, server.status), [scene, server.status])
-  const ledMaterials = useMemo(() => {
-    const materials: THREE.MeshStandardMaterial[] = []
-    model.traverse((child) => {
-      if (child instanceof THREE.Mesh && child.name === 'Status_LED') {
-        materials.push(child.material as THREE.MeshStandardMaterial)
-      }
-    })
-    return materials
-  }, [model])
-  const alertMaterial = useRef<THREE.MeshBasicMaterial>(null)
-  const y = RACK_INNER_BOTTOM + (server.startU - 1 + server.units / 2) * UNIT_HEIGHT
-  const hasError = showAlert && server.status !== 'healthy'
+  const model = useMemo(() => cloneModel(scene), [scene])
   const [hovered, setHovered] = useState(false)
   useCursor(hovered)
 
-  useFrame(({ clock }) => {
-    if (!hasError) return
-    const pulse = 0.45 + (Math.sin(clock.elapsedTime * (server.status === 'critical' ? 7 : 4)) + 1) * 0.275
-    ledMaterials.forEach((material) => {
-      material.emissiveIntensity = 2 + pulse * 6
-    })
-    if (alertMaterial.current) alertMaterial.current.opacity = 0.3 + pulse * 0.65
-  })
+  const y = RACK_INNER_BOTTOM + (server.startU - 1 + server.units / 2) * UNIT_HEIGHT
+  /** 고른 GLB의 고유 U 대비 실제 U — 1이 아니면 늘리거나 눌러 실제 점유 높이를 맞춘다. */
+  const heightScale = server.units / SERVER_MODEL_UNITS[server.model]
 
   return (
     <group
@@ -511,61 +246,46 @@ function Server({
         <boxGeometry args={[0.56, server.units * UNIT_HEIGHT + 0.024, 0.06]} />
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
-      <primitive object={model} />
-      <Html position={[0, 0, 0.63]} center distanceFactor={interactive ? 0.75 : 3.2} zIndexRange={[2, 1]}>
-        <button
-          className="server-click-target"
-          type="button"
-          style={{ width: 180, height: server.units === 2 ? 56 : 32 }}
-          onClick={(event) => { event.stopPropagation(); onSelect(server) }}
-          aria-label={`${server.name} 3D 서버 상세 보기`}
-          title={`${server.name} 상세 보기`}
-        />
-      </Html>
+      <primitive object={model} scale={[1, heightScale, 1]} />
+      {/*
+        ⚠️ `<Html>`은 **포커스된 랙에서만** 만든다.
+        drei의 Html은 장비 1대당 DOM 포털 하나 + 매 프레임 위치 계산·스타일 쓰기다.
+        1단계까지는 `servers`가 비어 0개였지만 u맵이 붙으면서 랙 36대 × 10대 = 포털 360개가
+        상시 존재하게 됐다. 게다가 이 버튼은 폭 180px 고정이라 멀리서는 뒤쪽 랙 클릭을 가린다.
+        비포커스 랙의 클릭은 위쪽 투명 히트박스(mesh)가 이미 받는다.
+      */}
+      {interactive && (
+        <Html position={[0, 0, 0.63]} center distanceFactor={0.75} zIndexRange={[2, 1]}>
+          <button
+            className="server-click-target"
+            type="button"
+            style={{ width: 180, height: Math.max(32, server.units * 28) }}
+            onClick={(event) => { event.stopPropagation(); onSelect(server) }}
+            aria-label={`${server.name} 3D 장비 상세 보기`}
+            title={`${server.name} 상세 보기`}
+          />
+        </Html>
+      )}
       {(selected || hovered) && (
         <mesh position={[0, 0, 0]}>
           <boxGeometry args={[0.53, server.units * UNIT_HEIGHT + 0.025, 0.76]} />
           <meshBasicMaterial color="#47d4ff" wireframe transparent opacity={selected ? 0.9 : 0.45} toneMapped={false} />
         </mesh>
       )}
-      {hasError && (
-        <>
-          <mesh position={[0, 0, -0.365]}>
-            <boxGeometry args={[0.47, server.units * UNIT_HEIGHT + 0.014, 0.012]} />
-            <meshBasicMaterial
-              ref={alertMaterial}
-              color={statusColors[server.status]}
-              transparent
-              opacity={0.8}
-              toneMapped={false}
-            />
-          </mesh>
-          <pointLight
-            position={[0, 0, -0.42]}
-            color={statusColors[server.status]}
-            intensity={server.status === 'critical' ? 2.8 : 1.6}
-            distance={0.8}
-            decay={2}
-          />
-          <Html position={[0.31, 0, -0.43]} center distanceFactor={5} occlude>
-            <div className={`server-alert ${server.status}`}>
-              <i />
-              <span><strong>{server.name}</strong>U{server.startU} · {server.status.toUpperCase()}</span>
-            </div>
-          </Html>
-        </>
-      )}
     </group>
   )
 }
 
+/** 랙 경보 표시. 색은 FMS 판정 등급 톤(`severityToneColors`)을 따르므로 범례와 어긋나지 않는다. */
 function RackAlert({
   label,
+  color,
   showLabel = true,
   offsetX = 0,
   offsetY = 0,
 }: {
   label: string
+  color: string
   showLabel?: boolean
   offsetX?: number
   offsetY?: number
@@ -585,13 +305,13 @@ function RackAlert({
     <group>
       <mesh position={[0, 1, 0]}>
         <boxGeometry args={[0.66, 2.08, 1.06]} />
-        <meshBasicMaterial ref={shellMaterial} color="#ff2945" wireframe transparent opacity={0.18} toneMapped={false} />
+        <meshBasicMaterial ref={shellMaterial} color={color} wireframe transparent opacity={0.18} toneMapped={false} />
       </mesh>
       <mesh position={[0, 2.08, -0.46]}>
         <sphereGeometry args={[0.045, 20, 12]} />
-        <meshStandardMaterial ref={beaconMaterial} color="#ff1738" emissive="#ff1738" emissiveIntensity={6} />
+        <meshStandardMaterial ref={beaconMaterial} color={color} emissive={color} emissiveIntensity={6} />
       </mesh>
-      <pointLight ref={beaconLight} position={[0, 2.08, -0.46]} color="#ff1738" intensity={4} distance={2.2} decay={2} />
+      <pointLight ref={beaconLight} position={[0, 2.08, -0.46]} color={color} intensity={4} distance={2.2} decay={2} />
       {showLabel && (
         <Html position={[0, 2.26, -0.46]} center distanceFactor={7}>
           <div className="rack-alert-badge" style={{ transform: `translate(${offsetX}px, ${offsetY}px)` }}><i /> RACK {label} ATTENTION</div>
@@ -622,9 +342,9 @@ function Rack({
   const { scene } = useGLTF(assetUrl('models/rack-42u.glb'), GLTF_USE_DRACO, GLTF_USE_MESHOPT)
   const model = useMemo(() => cloneModel(scene), [scene])
   const [hovered, setHovered] = useState(false)
-  // 예전에는 rack.servers(로컬 상태)로 판단해, u맵 미연동인 지금은 CRITICAL 랙도
-  // 정상 랙과 똑같이 그려졌다. FMS 판정을 쓴다.
+  // 랙 경보의 SSOT는 FMS 판정(`severity`)이다. 장비 단위 상태는 소스가 없다(A6 = b).
   const hasIncident = severity !== 'NORMAL'
+  const alertColor = severityToneColors[severityTones[severity]]
 
   return (
     <group
@@ -729,7 +449,6 @@ function Rack({
         <Server
           key={server.id}
           server={server}
-          showAlert={hasIncident}
           selected={selectedServerId === server.id}
           interactive={selected}
           onSelect={(selectedServer) => onSelectServer(rack, selectedServer)}
@@ -738,6 +457,7 @@ function Rack({
       {hasIncident && (
         <RackAlert
           label={rack.label}
+          color={alertColor}
           showLabel={!heatmap}
           offsetX={rack.tileX < 6 ? -34 : 34}
           offsetY={rack.tileZ < 7 ? 10 : -10}
@@ -816,17 +536,34 @@ function CameraController({ focusRack, focusServer }: { focusRack: RackData | nu
     }
   }, [])
 
+  /**
+   * ⚠️ **의존성은 객체가 아니라 스칼라다.**
+   *
+   * 이 effect는 `transition.current = 0`으로 카메라 전이를 처음부터 다시 시작한다. 그런데
+   * 전이 중(`transition < 1`)에는 아래 `useFrame`이 드래그·휠·WASD 입력을 통째로 건너뛴다.
+   * 그래서 `focusRack` **객체**를 의존성에 두면, 폴링·u맵 스윕이 만든 새 객체 하나에도
+   * 전이가 리셋되어 0.85초짜리 전이가 영원히 끝나지 않고 3D 조작이 막힌다.
+   *
+   * 카메라 위치를 실제로 결정하는 값(랙 좌표·회전, 장비 U 위치)만 의존성으로 둔다 —
+   * 같은 랙의 **다른** 장비가 u맵으로 추가돼도 카메라는 흔들리지 않는다.
+   */
+  const focusRackX = focusRack ? focusRack.tileX : null
+  const focusRackZ = focusRack ? focusRack.tileZ : null
+  const focusRackRotation = focusRack ? focusRack.rotation : null
+  const focusServerStartU = focusServer ? focusServer.startU : null
+  const focusServerUnits = focusServer ? focusServer.units : null
+
   useEffect(() => {
     fromPosition.current.copy(camera.position)
     fromTarget.current.copy(controls.current?.target ?? OVERVIEW_CAMERA_TARGET)
 
-    if (focusRack) {
-      const rackX = focusRack.tileX * TILE_SIZE
-      const rackZ = focusRack.tileZ * TILE_SIZE
-      const focusHeight = focusServer
-        ? Math.max(0.2, 0.06 + RACK_INNER_BOTTOM + (focusServer.startU - 1 + focusServer.units / 2) * UNIT_HEIGHT)
+    if (focusRackX !== null && focusRackZ !== null && focusRackRotation !== null) {
+      const rackX = focusRackX * TILE_SIZE
+      const rackZ = focusRackZ * TILE_SIZE
+      const focusHeight = focusServerStartU !== null && focusServerUnits !== null
+        ? Math.max(0.2, 0.06 + RACK_INNER_BOTTOM + (focusServerStartU - 1 + focusServerUnits / 2) * UNIT_HEIGHT)
         : RACK_FOCUS_HEIGHT
-      rackForward.current.set(Math.sin(focusRack.rotation), 0, Math.cos(focusRack.rotation))
+      rackForward.current.set(Math.sin(focusRackRotation), 0, Math.cos(focusRackRotation))
       toTarget.current.set(rackX, focusHeight, rackZ)
       toPosition.current.copy(toTarget.current).addScaledVector(rackForward.current, RACK_FOCUS_DISTANCE)
     } else {
@@ -835,7 +572,7 @@ function CameraController({ focusRack, focusServer }: { focusRack: RackData | nu
     }
 
     transition.current = 0
-  }, [camera, focusRack, focusServer])
+  }, [camera, focusRackX, focusRackZ, focusRackRotation, focusServerStartU, focusServerUnits])
 
   useFrame(({ camera }, delta) => {
     if (transition.current < 1) {
@@ -1125,7 +862,15 @@ function DataCenterLobby({
           <dl className="fleet-summary">
             <div><dt>FACILITIES</dt><dd>{zones ? String(facilities.length).padStart(2, '0') : NO_VALUE}</dd></div>
             <div><dt>TOTAL RACKS</dt><dd>{zones ? totalRacks : NO_VALUE}</dd></div>
-            <div><dt>TOTAL ASSETS</dt><dd>{totalAssets ?? NO_VALUE}</dd></div>
+            {/*
+              ⚠️ 이 수는 상단바 `IN RACKS`와 **모집단이 다르다**. 여기는 사이드바
+              `totalAssetCount`(ZONE 서브트리 전체 — 랙 밖에 놓인 CRAC·UPS·배전반까지 포함)이고,
+              상단바는 랙 안 자산만이다. 같은 `ASSETS` 라벨을 쓰면 들어갔을 때 수가 줄어든 것이
+              오류로 읽힌다 — §11-10에서 시작해 MOUNTED/IN RACK까지 나눈 그 문제의 세 번째 모집단이다.
+            */}
+            <div title="전산실(ZONE) 전체 자산 — 랙 밖에 놓인 CRAC·UPS·배전반 포함">
+              <dt>ZONE ASSETS</dt><dd>{totalAssets ?? NO_VALUE}</dd>
+            </div>
           </dl>
         </div>
 
@@ -1161,8 +906,8 @@ function DataCenterLobby({
                 </span>
                 <span className="facility-metrics">
                   <span><small>RACKS</small><strong>{String(zone.rackCount).padStart(2, '0')}</strong></span>
-                  <span>
-                    <small>ASSETS</small>
+                  <span title="전산실 전체 자산 — 랙 밖 설비(CRAC·UPS 등) 포함">
+                    <small>ZONE ASSETS</small>
                     <strong>{zone.totalAssetCount === null ? NO_VALUE : zone.totalAssetCount}</strong>
                   </span>
                 </span>
@@ -1181,137 +926,97 @@ function DataCenterLobby({
   )
 }
 
+/**
+ * 장비 상세 — **netis-fms 자산 원장(u맵 `RackAsset`) 값만** 표시한다.
+ *
+ * 예전 이 패널은 CPU·메모리·온도·전력·업타임·최근 활동·장애 워크플로를 보여줬는데
+ * 전부 `serverProfiles` 하드코딩이었다. netis-fms는 IT 장비 텔레메트리를 수집하지 않으므로
+ * (A6 = b 확정) 그 값들은 **대체 소스가 없다** — 되살리지 않고 없는 이유를 밝힌다(Q5-b·C7).
+ */
 function ServerDetailPanel({
   rack,
   server,
-  incident,
   onBackToRack,
   onOverview,
-  onUpdateIncident,
 }: {
   rack: RackData
   server: ServerData
-  incident?: IncidentRecord
   onBackToRack: () => void
   onOverview: () => void
-  onUpdateIncident: (patch: Partial<IncidentRecord>) => void
 }) {
-  const profile = serverProfiles[server.id]
-  const telemetry = [
-    { label: 'CPU', value: profile.cpuPercent, suffix: '%', progress: profile.cpuPercent },
-    { label: 'MEMORY', value: profile.memoryPercent, suffix: '%', progress: profile.memoryPercent },
-    { label: 'STORAGE', value: profile.storagePercent, suffix: '%', progress: profile.storagePercent },
-    { label: 'TEMPERATURE', value: profile.temperatureCelsius, suffix: '°C', progress: Math.min(profile.temperatureCelsius / 85 * 100, 100) },
-  ]
-
   return (
     <>
       <div className="server-panel-toolbar">
         <button type="button" onClick={onBackToRack}><span aria-hidden="true">←</span> RACK {rack.label}</button>
-        <span><i /> {profile.lastSync}</span>
+        <span><i /> NETIS-FMS</span>
       </div>
 
-      <p className="panel-title">SERVER DETAIL</p>
+      <p className="panel-title">ASSET DETAIL</p>
       <div className="server-focus-heading">
         <div>
           <strong>{server.name}</strong>
-          <span>{profile.role}</span>
+          <span>{server.assetCode}</span>
         </div>
-        <span className={`server-state ${server.status}`}><i />{server.status}</span>
+        {/*
+          `lifecycleStatus`는 자산 원장의 생애주기(OPERATION 등)다. **건강 상태가 아니므로**
+          초록/빨강으로 칠하지 않고 중립 배지로 원값을 그대로 보여준다.
+        */}
+        <span className="server-state neutral" title="자산 생애주기 상태 (netis-fms)"><i />{orDash(server.lifecycleStatus)}</span>
       </div>
-      <span className="server-model-name">{serverModelLabels[server.model]}</span>
+      <span className="server-model-name">{orDash(server.category)}</span>
 
-      <section className="server-location-grid" aria-label="서버 설치 위치">
+      <section className="server-location-grid" aria-label="장비 설치 위치">
         <div><span>RACK</span><strong>{rack.label}</strong></div>
         <div><span>POSITION</span><strong>{formatUnitRange(server)}</strong></div>
         <div><span>HEIGHT</span><strong>{server.units}<small> U</small></strong></div>
       </section>
 
-      <section className="server-telemetry">
-        <div className="server-section-heading">
-          <span>LIVE TELEMETRY</span>
-          <small>DEMO SNAPSHOT</small>
-        </div>
-        <div className="server-metric-grid">
-          {telemetry.map((metric) => (
-            <article className={metric.progress >= 85 ? 'hot' : ''} key={metric.label}>
-              <span>{metric.label}</span>
-              <strong>{metric.value}<small>{metric.suffix}</small></strong>
-              <div><i style={{ width: `${metric.progress}%` }} /></div>
-            </article>
-          ))}
-        </div>
-      </section>
-
       <section className="server-system-info">
-        <div className="server-section-heading"><span>SYSTEM INFORMATION</span></div>
+        <div className="server-section-heading"><span>ASSET REGISTER</span><small>NETIS-FMS</small></div>
         <dl>
-          <div><dt>IP ADDRESS</dt><dd>{profile.ipAddress}</dd></div>
-          <div><dt>OPERATING SYSTEM</dt><dd>{profile.operatingSystem}</dd></div>
-          <div><dt>SERIAL NUMBER</dt><dd>{profile.serialNumber}</dd></div>
-          <div><dt>POWER DRAW</dt><dd>{profile.powerWatts} W</dd></div>
-          <div><dt>UPTIME</dt><dd>{profile.uptime}</dd></div>
+          <div><dt>CATEGORY</dt><dd>{orDash(server.category)}</dd></div>
+          <div><dt>MANUFACTURER</dt><dd>{orDash(server.manufacturer)}</dd></div>
+          <div><dt>MODEL</dt><dd>{orDash(server.modelName)}</dd></div>
+          <div><dt>SERIAL NUMBER</dt><dd>{orDash(server.serialNo)}</dd></div>
+          <div><dt>IP ADDRESS</dt><dd>{orDash(server.ip)}</dd></div>
+          <div><dt>SPEC</dt><dd>{orDash(server.spec)}</dd></div>
+          <div><dt>MONITORING</dt><dd>{orDash(server.monitoringType)}</dd></div>
         </dl>
+        <p className="rack-source-note">
+          값이 비어 있는 항목은 netis-fms 자산 원장에 등록되지 않은 것입니다.
+        </p>
       </section>
 
-      {incident && (
-        <section className={`server-incident-workflow ${server.status}`}>
-          <div className="server-section-heading">
-            <span>INCIDENT RESPONSE</span>
-            <small>DEMO WORKFLOW</small>
-          </div>
-          <div className="incident-response-meta">
-            <div><span>DETECTED</span><strong>{incident.detectedAt}</strong></div>
-            <div><span>DURATION</span><strong>{incident.duration}</strong></div>
-            <div><span>STATE</span><strong>{incident.acknowledged ? 'ACK' : 'OPEN'}</strong></div>
-          </div>
-          <label className="incident-field">
-            <span>ASSIGNEE</span>
-            <select value={incident.assignee} onChange={(event) => onUpdateIncident({ assignee: event.target.value })}>
-              <option>UNASSIGNED</option>
-              <option>NOC L1</option>
-              <option>PLATFORM</option>
-              <option>DATABASE</option>
-              <option>NETWORK</option>
-            </select>
-          </label>
-          <label className="incident-field">
-            <span>OPERATOR NOTE <small>AUTO-SAVED</small></span>
-            <textarea
-              rows={3}
-              value={incident.note}
-              onChange={(event) => onUpdateIncident({ note: event.target.value })}
-              placeholder="장애 조치 메모를 입력하세요."
-            />
-          </label>
-          <button
-            className={incident.acknowledged ? 'incident-acknowledge acknowledged' : 'incident-acknowledge'}
-            type="button"
-            onClick={() => onUpdateIncident({ acknowledged: !incident.acknowledged })}
-          >
-            <i /> {incident.acknowledged ? '확인 완료 · 다시 열기' : '장애 확인 완료로 표시'}
-          </button>
-        </section>
-      )}
+      <section className="server-telemetry">
+        <div className="server-section-heading"><span>LIVE TELEMETRY</span><small>미연동</small></div>
+        <p className="rack-source-note">
+          CPU·메모리·온도·트래픽 등 장비 단위 실시간 지표는 netis-fms가 수집하지 않습니다.
+          랙 단위 온·습도·전력은 랙 상세에서 확인하세요.
+        </p>
+      </section>
 
-      <section className="server-activity">
-        <div className="server-section-heading"><span>RECENT ACTIVITY</span><small>LAST 24H</small></div>
-        <div className="server-activity-list">
-          {profile.activities.map((activity) => (
-            <div className={activity.tone} key={`${activity.time}-${activity.message}`}>
-              <time>{activity.time}</time><i /><span>{activity.message}</span>
-            </div>
-          ))}
-        </div>
+      <section className="server-telemetry">
+        <div className="server-section-heading"><span>3D MODEL</span><small>형상 근사</small></div>
+        <p className="rack-source-note">
+          {serverModelLabels[server.model]} 형상을 {server.units}U 높이에 맞춰 표시합니다.
+          실제 제조사·모델명은 위 ASSET REGISTER 값입니다.
+          {server.hasFront || server.hasRear ? ' 실물 사진(FRONT/REAR)이 등록되어 있습니다 — 3D 텍스처 적용은 후속 작업입니다.' : ''}
+        </p>
       </section>
 
       <div className="server-panel-actions">
         <button type="button" onClick={onBackToRack}><span aria-hidden="true">←</span> 랙 상세</button>
         <button type="button" onClick={onOverview}>전체 보기</button>
       </div>
-      <div className="mouse-tip">3D 서버 또는 장비 목록을 클릭해 상세 정보를 확인할 수 있습니다.</div>
+      <div className="mouse-tip">3D 장비 또는 장비 목록을 클릭해 상세 정보를 확인할 수 있습니다.</div>
     </>
   )
+}
+
+/** 경보 랙 1건 — 씬 랙 + FMS 집계 원본. 값은 전부 FMS가 준 것이다. */
+type RackAlertEntry = {
+  rack: RackData
+  facts: RackSummary
 }
 
 type AssetSearchResult = {
@@ -1341,42 +1046,40 @@ function AssetSearch({
   const [activeIndex, setActiveIndex] = useState(0)
   const input = useRef<HTMLInputElement>(null)
   const searchIndex = useMemo<AssetSearchResult[]>(() => rackData.flatMap((rack) => {
-    // 랙 요약은 FMS 집계만 쓴다. rack.servers/totalUnits(기본 42U)로 만들면
+    // 랙 요약 수치는 FMS 집계(`RackSummary`)에서만 낸다. 씬 랙(`RackData`)에서 다시 세면
     // 같은 랙의 상세 패널과 다른 숫자가 나온다 — 한 화면 안의 모순(C6).
     const facts = rackFacts.get(rack.id) ?? null
     const rackResult: AssetSearchResult = {
       id: rack.id,
       kind: 'rack',
       label: `RACK ${rack.label}`,
-      subtitle: `${facts ? facts.assetCount : NO_VALUE} ASSETS · `
+      subtitle: `장착 ${facts ? facts.assetCount : NO_VALUE} · `
         + `${facts ? facts.occupiedUnits : NO_VALUE} / ${facts?.rackUnits ?? NO_VALUE}U USED`,
       keywords: `${rack.id} rack ${rack.label} ${facts?.code ?? ''} ${rack.servers.map((server) => server.name).join(' ')}`.toLowerCase(),
       rack,
     }
-    const serverResults = rack.servers.map<AssetSearchResult>((server) => {
-      const profile = serverProfiles[server.id]
-      return {
-        id: server.id,
-        kind: 'server',
-        label: server.name,
-        subtitle: `RACK ${rack.label} · ${formatUnitRange(server)} · ${profile?.ipAddress ?? 'IP 미등록'}`,
-        keywords: [
-          server.id,
-          server.name,
-          server.model,
-          serverModelLabels[server.model],
-          server.status,
-          rack.id,
-          rack.label,
-          profile?.role,
-          profile?.ipAddress,
-          profile?.serialNumber,
-          profile?.operatingSystem,
-        ].join(' ').toLowerCase(),
-        rack,
-        server,
-      }
-    })
+    // 검색 키워드는 **FMS 자산 원장 값만** 쓴다. 3D 형상 모델명(`server.model`)은
+    // 우리가 고른 근사치라 검색어로 넣으면 없는 장비가 검색되는 것처럼 보인다.
+    const serverResults = rack.servers.map<AssetSearchResult>((server) => ({
+      id: server.id,
+      kind: 'server',
+      label: server.name,
+      subtitle: `RACK ${rack.label} · ${formatUnitRange(server)} · ${server.ip ?? 'IP 미등록'}`,
+      keywords: [
+        server.assetCode,
+        server.name,
+        server.category,
+        server.manufacturer,
+        server.modelName,
+        server.serialNo,
+        server.ip,
+        server.lifecycleStatus,
+        rack.id,
+        rack.label,
+      ].filter(Boolean).join(' ').toLowerCase(),
+      rack,
+      server,
+    }))
     return [rackResult, ...serverResults]
   }), [rackData, rackFacts])
   const results = useMemo(() => {
@@ -1450,8 +1153,8 @@ function AssetSearch({
           value={query}
           type="search"
           role="combobox"
-          placeholder="서버 · IP · 시리얼 · 랙 검색"
-          aria-label="서버, IP, 시리얼 또는 랙 검색"
+          placeholder="장비 · 자산코드 · IP · 시리얼 · 랙 검색"
+          aria-label="장비, 자산코드, IP, 시리얼 또는 랙 검색"
           aria-expanded={open && query.trim().length > 0}
           aria-controls="asset-search-results"
           aria-haspopup="listbox"
@@ -1495,16 +1198,15 @@ function AssetSearch({
             >
               <span className={`asset-result-symbol ${result.kind}`} aria-hidden="true">{result.kind === 'rack' ? 'R' : 'S'}</span>
               <span className="asset-result-copy"><strong>{result.label}</strong><small>{result.subtitle}</small></span>
-              {result.server ? (
-                <span className={`asset-result-status ${result.server.status}`}><i />{result.server.status}</span>
-              ) : (
-                <span className="asset-result-status rack">RACK</span>
-              )}
+              {/* 상태 배지가 아니라 **분류 배지**다 — 장비 상태 소스가 없다(A6 = b). */}
+              <span className="asset-result-status rack">
+                {result.server ? orDash(result.server.category) : 'RACK'}
+              </span>
               <span className="asset-result-enter" aria-hidden="true">↵</span>
             </button>
           ))}
           {results.length === 0 && (
-            <div className="asset-search-empty" role="presentation"><span>⌕</span><strong>검색 결과가 없습니다</strong><small>서버명, IP, 시리얼 또는 랙 이름을 확인하세요.</small></div>
+            <div className="asset-search-empty" role="presentation"><span>⌕</span><strong>검색 결과가 없습니다</strong><small>장비명, 자산코드, IP, 시리얼 또는 랙 이름을 확인하세요.</small></div>
           )}
         </div>
       )}
@@ -1512,35 +1214,40 @@ function AssetSearch({
   )
 }
 
+/**
+ * 경보 랙 탐색기.
+ *
+ * 예전에는 **장비 단위** 장애(시드 `status`)를 훑었는데 그 소스는 없어졌다(A6 = b).
+ * 대신 **FMS 판정(`RackSummary.severity`)이 NORMAL이 아닌 랙**을 훑는다 — 이건 실데이터다.
+ * 장애 티켓(담당자·조치 상태)은 `GET /api/tickets` 연동 후에 붙인다.
+ */
 function IncidentNavigator({
   active,
   hidden,
   alerts,
-  /** 장비 단위 장애 소스(u맵)가 아직 없으면 true — 개수를 0으로 단언하지 않는다(C6). */
+  /** 랙 목록 자체를 아직 못 받았으면 true — 개수를 0으로 단언하지 않는다(C6). */
   unavailable,
   currentIndex,
-  records,
   onToggle,
   onPrevious,
   onNext,
 }: {
   active: boolean
   hidden: boolean
-  alerts: DashboardAlert[]
+  alerts: RackAlertEntry[]
   unavailable: boolean
   currentIndex: number
-  records: Record<string, IncidentRecord>
   onToggle: () => void
   onPrevious: () => void
   onNext: () => void
 }) {
   const current = currentIndex >= 0 ? alerts[currentIndex] : alerts[0]
-  const record = current ? records[current.server.id] : undefined
+  const tone = current ? severityTones[current.facts.severity] : 'normal'
 
   return (
     <section
       className={`incident-navigator${active ? ' active' : ''}${hidden ? ' dashboard-open' : ''}`}
-      aria-label="장애 탐색 모드"
+      aria-label="경보 랙 탐색 모드"
       aria-hidden={hidden}
       inert={hidden}
     >
@@ -1550,32 +1257,33 @@ function IncidentNavigator({
         onClick={onToggle}
         aria-pressed={active}
         disabled={alerts.length === 0}
+        title="netis-fms 판정이 정상이 아닌 랙을 차례로 확인합니다"
       >
         <span className="incident-mode-icon" aria-hidden="true">!</span>
-        <span><small>ISSUE NAVIGATOR</small><strong>{active ? 'INCIDENT MODE ACTIVE' : '장애 탐색 모드'}</strong></span>
+        <span><small>ALERT RACKS</small><strong>{active ? 'ALERT MODE ACTIVE' : '경보 랙 탐색'}</strong></span>
         <em>{unavailable ? NO_VALUE : String(alerts.length).padStart(2, '0')}</em>
       </button>
 
       {active && current && (
         <div className="incident-navigator-body" aria-live="polite">
           <div className="incident-navigator-heading">
-            <span className={`incident-severity ${current.server.status}`}><i />{current.server.status}</span>
+            <span className={`incident-severity ${tone}`}><i />{severityLabel(current.facts.severity)}</span>
             <strong>{currentIndex + 1} / {alerts.length}</strong>
           </div>
           <div className="incident-navigator-asset">
-            <strong>{current.server.name}</strong>
-            <span>RACK {current.rack.label} · {formatUnitRange(current.server)}</span>
-            <small>{current.type}</small>
+            <strong>RACK {current.rack.label}</strong>
+            <span>{current.facts.code ?? NO_VALUE}</span>
+            <small>장착 {current.facts.assetCount} · {current.facts.occupiedUnits} / {current.facts.rackUnits ?? NO_VALUE}U</small>
           </div>
           <div className="incident-navigator-meta">
-            <span>DETECTED <strong>{record?.detectedAt ?? '—'}</strong></span>
-            <span>DURATION <strong>{record?.duration ?? '—'}</strong></span>
-            <span>OWNER <strong>{record?.assignee ?? 'UNASSIGNED'}</strong></span>
+            <span>TEMP <strong>{current.facts.temp != null ? `${current.facts.temp.toFixed(1)}°C` : NO_VALUE}</strong></span>
+            <span>POWER <strong>{current.facts.powerKw != null ? `${current.facts.powerKw.toFixed(2)}kW` : NO_VALUE}</strong></span>
+            <span>수신 <strong>{current.facts.collectedAt ? new Date(current.facts.collectedAt).toLocaleTimeString('ko-KR') : NO_VALUE}</strong></span>
           </div>
           <div className="incident-navigator-actions">
-            <button type="button" onClick={onPrevious} aria-label="이전 장애로 이동"><span aria-hidden="true">←</span> PREV</button>
+            <button type="button" onClick={onPrevious} aria-label="이전 경보 랙으로 이동"><span aria-hidden="true">←</span> PREV</button>
             <button type="button" onClick={onToggle}>EXIT MODE</button>
-            <button type="button" onClick={onNext} aria-label="다음 장애로 이동">NEXT <span aria-hidden="true">→</span></button>
+            <button type="button" onClick={onNext} aria-label="다음 경보 랙으로 이동">NEXT <span aria-hidden="true">→</span></button>
           </div>
         </div>
       )}
@@ -1657,161 +1365,38 @@ function HeatmapControl({
   )
 }
 
-/**
- * ⚠️ 생성 데이터 차트 — FMS `GET /api/performance/series/zone`(E19 B4) 연동 전까지의 임시물이다.
- *
- * **실제 랙 라벨을 계열 이름으로 쓰지 않는다.** 실 자산 식별자에 가짜 측정값이 붙으면,
- * 같은 랙의 상세 패널이 TEMP `—`라고 말하는 것과 한 화면에서 정면으로 모순된다.
- * 계열은 익명(`샘플 N`)이고, 생성기가 만드는 서로 다른 프로파일 수(4)만큼만 그린다.
- */
-function TemperatureHistoryChart({
-  points,
-  theme,
-  active,
-}: {
-  points: TemperatureHistoryPoint[]
-  theme: ThemeMode
-  active: boolean
-}) {
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const container = containerRef.current
-    if (!container || !active) return
-
-    const sampleKeys = Object.keys(points[0]?.rackCelsius ?? {}).slice(0, SAMPLE_SERIES_COUNT)
-
-    const lightTheme = theme === 'light'
-    const rackColors = ['#ff9f43', '#7d8cff', '#35c98f', '#c379ef']
-    const averageColor = lightTheme ? '#087fa8' : '#63d7ff'
-    const axisColor = lightTheme ? '#6a7d8d' : '#60798d'
-    const splitLineColor = lightTheme ? '#c9d4dc' : '#223b4d'
-    const allValues = points.flatMap((point) => [
-      point.roomAverageCelsius,
-      ...sampleKeys.map((key) => point.rackCelsius[key]),
-    ])
-    const yMin = Math.floor(Math.min(...allValues) - 0.8)
-    const yMax = Math.ceil(Math.max(...allValues) + 0.8)
-    const chart = echarts.init(container, undefined, { renderer: 'canvas' })
-    const option: EChartsCoreOption = {
-      animationDuration: 650,
-      aria: { enabled: true },
-      color: [averageColor, ...rackColors],
-      tooltip: {
-        trigger: 'axis',
-        backgroundColor: lightTheme ? '#ffffff' : '#081722f5',
-        borderColor: lightTheme ? '#9fb4c3' : '#35556c',
-        textStyle: { color: lightTheme ? '#1a2e3e' : '#dce9f5', fontSize: 11 },
-        valueFormatter: (value: unknown) => `${Number(value).toFixed(1)} °C`,
-      },
-      legend: {
-        type: 'scroll',
-        top: 0,
-        left: 0,
-        right: 0,
-        itemWidth: 16,
-        itemHeight: 3,
-        itemGap: 16,
-        textStyle: { color: axisColor, fontSize: 10, fontFamily: 'ui-monospace, monospace' },
-        pageIconColor: averageColor,
-        pageIconInactiveColor: lightTheme ? '#aab9c4' : '#3d5668',
-        pageTextStyle: { color: axisColor, fontSize: 9 },
-      },
-      grid: { top: 45, right: 18, bottom: 32, left: 48 },
-      xAxis: {
-        type: 'category',
-        boundaryGap: false,
-        data: points.map((point) => point.time),
-        axisLine: { lineStyle: { color: splitLineColor } },
-        axisTick: { show: false },
-        axisLabel: { color: axisColor, fontSize: 9, interval: 3 },
-      },
-      yAxis: {
-        type: 'value',
-        min: yMin,
-        max: yMax,
-        splitNumber: 4,
-        axisLabel: { color: axisColor, fontSize: 9, formatter: '{value}°' },
-        axisLine: { show: false },
-        axisTick: { show: false },
-        splitLine: { lineStyle: { color: splitLineColor, type: 'dashed' } },
-      },
-      series: [
-        {
-          name: '샘플 평균 (생성)',
-          type: 'line',
-          data: points.map((point) => point.roomAverageCelsius),
-          showSymbol: false,
-          smooth: 0.32,
-          lineStyle: { width: 3, color: averageColor },
-          areaStyle: { color: lightTheme ? '#1299c31f' : '#43cfff1a' },
-          emphasis: { focus: 'series' },
-          z: 5,
-        },
-        ...sampleKeys.map((key, sampleIndex) => ({
-          name: `샘플 ${sampleIndex + 1}`,
-          type: 'line' as const,
-          data: points.map((point) => point.rackCelsius[key]),
-          showSymbol: false,
-          smooth: 0.25,
-          lineStyle: { width: 1.5, color: rackColors[sampleIndex % rackColors.length], opacity: 0.86 },
-          emphasis: { focus: 'series' as const, lineStyle: { width: 3 } },
-        })),
-      ],
-    }
-
-    chart.setOption(option)
-    const resizeObserver = new ResizeObserver(() => chart.resize())
-    resizeObserver.observe(container)
-    const resizeFrame = window.requestAnimationFrame(() => chart.resize())
-
-    return () => {
-      window.cancelAnimationFrame(resizeFrame)
-      resizeObserver.disconnect()
-      chart.dispose()
-    }
-  }, [active, points, theme])
-
-  return (
-    <div
-      ref={containerRef}
-      className="temperature-history-chart"
-      role="img"
-      aria-label="생성 샘플 온도 추이 그래프 — netis-fms 실측 시계열 미연동"
-    />
-  )
-}
-
 function DataCenterDashboard({
   open,
   onToggle,
-  onSelectIncident,
+  onSelectAlertRack,
   dataCenter,
   zone,
   rackFacts,
   lastUpdatedAt,
   racks,
-  metrics,
-  incidentRecords,
-  activeIncidentServerId,
-  theme,
+  alertRacks,
+  activeAlertRackId,
 }: {
   open: boolean
   onToggle: () => void
-  onSelectIncident: (rack: RackData, server: ServerData) => void
+  onSelectAlertRack: (rack: RackData) => void
   dataCenter: ZoneSummary
   zone: ZoneAggregate | null
   rackFacts: Map<string, RackSummary>
   lastUpdatedAt: Date | null
   racks: RackData[]
-  metrics: DashboardMetrics
-  incidentRecords: Record<string, IncidentRecord>
-  activeIncidentServerId: string | null
-  theme: ThemeMode
+  alertRacks: RackAlertEntry[]
+  activeAlertRackId: string | null
 }) {
-  // 서버 상태 도넛·모델 믹스는 소스(u맵)가 붙을 때 함께 되살린다 —
-  // 지금은 0으로 계산된 그래프를 그리지 않는다.
-  const temperatureHistory = useMemo(() => createTemperatureHistory(PLACEHOLDER_BASE_TEMPERATURE_C, racks), [racks])
+  /** 장비 구성은 `categoryCounts`(랙 내 전체 자산)에서 낸다 — 많은 쪽이 전체 모집단이다. */
+  const categoryRows = useMemo(() => {
+    const totals = zone?.categoryTotals ?? {}
+    return Object.entries(totals).sort((a, b) => b[1] - a[1])
+  }, [zone])
+  const categoryMax = categoryRows.reduce((largest, [, count]) => Math.max(largest, count), 0)
+  // categoryCounts가 비면 합이 0이 되는데 그건 "0대"가 아니라 부재일 수 있다 — 음수 차이를 만들지 않는다.
+  const zoneRackAssetCount = zone ? displayRackAssetCount(zone.rackAssetCount, zone.mountedAssetCount) : null
+  const zoneUnmountedCount = zone ? unmountedAssetCount(zoneRackAssetCount, zone.mountedAssetCount) : null
 
   return (
     <>
@@ -1838,10 +1423,20 @@ function DataCenterDashboard({
               FMS가 IT 장비 텔레메트리를 수집하지 않아(A6 = b) 소스가 없다 — 0이 아니라 `—`다(C6).
             */}
             <section className="dashboard-kpis">
+              {/*
+                두 자산 수는 정의가 다르다(§11-11 Q1) — 큰 쪽(랙 내 전체)을 대표값으로 두고
+                작은 쪽(U 배정)을 캡션에 함께 밝힌다. 하나만 보여주면 사용자가 다른 화면의
+                수와 어긋난 이유를 알 수 없다.
+              */}
               <article>
-                <span>FLEET HEALTH</span>
-                <strong>{NO_VALUE}</strong>
-                <em>장비 단위 상태 미연동</em>
+                <span>ASSETS IN RACKS</span>
+                <strong>{zoneRackAssetCount ?? NO_VALUE}</strong>
+                <em>
+                  {zone
+                    ? `장착(U 배정) ${zone.mountedAssetCount}대`
+                      + (zoneUnmountedCount !== null ? ` · U 미배정 ${zoneUnmountedCount}대` : '')
+                    : '집계 대기'}
+                </em>
               </article>
               <article>
                 <span>CAPACITY USED</span>
@@ -1872,13 +1467,27 @@ function DataCenterDashboard({
               </article>
             </section>
 
+            {/*
+              온습도 추이 — **자리만 남기고 값은 그리지 않는다**(Q5-b 확정).
+              예전에는 사인파 생성값을 "샘플 N"으로 라벨링해 그렸는데, °C 축이 달린 곡선은
+              라벨보다 **그래프 모양이 먼저 읽힌다** — 관제 화면에서 가장 위험한 형태다(D3·C7).
+              생성기(`createTemperatureHistory`)는 제거했다. FMS E19 B4 연동 시 이 자리에 실측이 들어온다.
+            */}
             <article className="dashboard-card temperature-history-card">
               <div className="dashboard-card-heading">
                 <div><span>ENVIRONMENT · LAST 24H</span><h3>Temperature trend</h3></div>
-                <small>생성 데이터 · FMS 온습도 시계열(E19 B4) 미연동</small>
+                <small>미연동 · E19 B4</small>
               </div>
-              <TemperatureHistoryChart points={temperatureHistory} theme={theme} active={open} />
-              <p className="temperature-history-note"><i /> DEMO TELEMETRY · 실측이 아니다. GET /api/performance/series/zone 연동 시 대체</p>
+              {/*
+                `role="status"`(aria-live)가 아니라 `note`다 — 내용이 영구 정적이라
+                대시보드를 열 때마다 스크린리더가 같은 문장을 다시 읽을 이유가 없다.
+                aria-live는 값이 바뀌는 것에 쓴다(상단바 LIVE 뱃지 등).
+              */}
+              <div className="chart-placeholder" role="note">
+                <strong>{NO_VALUE}</strong>
+                <p>전산실 온습도 시계열은 아직 netis-fms와 연동되지 않았습니다.</p>
+                <small>GET /api/performance/series/zone (E19 B4)</small>
+              </div>
             </article>
 
             <section className="dashboard-chart-grid">
@@ -1917,52 +1526,69 @@ function DataCenterDashboard({
                 </p>
               </article>
 
+              {/*
+                카테고리 구성은 FMS `categoryCounts` 실값이다(랙 내 전체 자산 기준).
+                예전의 "서버 모델 3종 믹스"는 우리 GLB 이름을 센 것이라 되살리지 않는다 —
+                3D 형상은 근사치이고 제조사·모델명은 자산마다 다르다.
+              */}
               <article className="dashboard-card model-chart-card">
                 <div className="dashboard-card-heading">
-                  <div><span>HARDWARE MIX</span><h3>Server models</h3></div>
+                  <div><span>ASSET MIX</span><h3>Category</h3></div>
+                  <small>랙 내 자산 · NETIS-FMS</small>
                 </div>
-                <p className="rack-source-note">
-                  장비 구성은 랙 U맵 연동 후 표시됩니다. 현재 FMS 등록 자산
-                  {' '}{zone ? `${zone.assetCount}대` : NO_VALUE}.
-                </p>
+                {categoryRows.length === 0 ? (
+                  <p className="rack-source-note">
+                    {zone ? '이 전산실의 랙에 등록된 활성 자산이 없습니다.' : '집계를 기다리는 중입니다.'}
+                  </p>
+                ) : (
+                  <div className="rack-bars">
+                    {categoryRows.map(([category, count]) => (
+                      <div className="rack-bar-row" key={category}>
+                        <strong>{category}</strong>
+                        <div><span style={{ width: `${categoryMax > 0 ? count / categoryMax * 100 : 0}%` }} /></div>
+                        <em>{count}</em>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </article>
             </section>
 
             <section className="dashboard-card incident-card">
               <div className="dashboard-card-heading">
-                <div><span>OPERATIONS</span><h3>Active incidents</h3></div>
-                {/* 장애 목록의 SSOT는 FMS 티켓(GET /api/tickets)이며 아직 연동 전이다. */}
+                <div><span>OPERATIONS</span><h3>Alert racks</h3></div>
+                {/* 장애 티켓(담당자·조치 상태)의 SSOT는 FMS `GET /api/tickets`이며 아직 연동 전이다. */}
                 <small>{zone ? `${zone.alertRackCount} RACKS NOT NORMAL` : NO_VALUE}</small>
               </div>
-              <div className="incident-table" aria-label="활성 장애 목록">
+              <div className="incident-table" aria-label="경보 랙 목록">
                 <div className="incident-row incident-head" aria-hidden="true">
-                  <span>SEVERITY</span><span>TYPE</span><span>ASSET</span><span>LOCATION</span><span>DETECTED / AGE</span><span>MODEL</span>
+                  <span>SEVERITY</span><span>RACK</span><span>TEMP</span><span>HUMIDITY</span><span>POWER</span><span>COLLECTED</span>
                 </div>
-                {metrics.alerts.map(({ rack, server, type }) => {
-                  const incident = incidentRecords[server.id]
-                  return (
-                    <button
-                      className={activeIncidentServerId === server.id ? 'incident-row active' : 'incident-row'}
-                      type="button"
-                      key={server.id}
-                      onClick={() => onSelectIncident(rack, server)}
-                      aria-label={`${server.name}, RACK ${rack.label}, ${server.status}, 상세 보기`}
-                    >
-                      <span className={`incident-severity ${server.status}`}><i />{server.status}</span>
-                      <strong>{type}</strong>
-                      <span>{server.name}</span>
-                      <span>RACK {rack.label} · {formatUnitRange(server)}</span>
-                      <span>{incident ? `${incident.detectedAt} · ${incident.duration}` : '—'}</span>
-                      <span>{serverModelLabels[server.model]}</span>
-                    </button>
-                  )
-                })}
-                {metrics.alerts.length === 0 && (
+                {alertRacks.map(({ rack, facts }) => (
+                  <button
+                    className={activeAlertRackId === rack.id ? 'incident-row active' : 'incident-row'}
+                    type="button"
+                    key={rack.id}
+                    onClick={() => onSelectAlertRack(rack)}
+                    aria-label={`RACK ${rack.label}, ${severityLabel(facts.severity)}, 상세 보기`}
+                  >
+                    <span className={`incident-severity ${severityTones[facts.severity]}`}><i />{severityLabel(facts.severity)}</span>
+                    <strong>RACK {rack.label}</strong>
+                    <span>{facts.temp != null ? `${facts.temp.toFixed(1)} °C` : NO_VALUE}</span>
+                    <span>{facts.humidity != null ? `${facts.humidity.toFixed(1)} %` : NO_VALUE}</span>
+                    <span>{facts.powerKw != null ? `${facts.powerKw.toFixed(2)} kW` : NO_VALUE}</span>
+                    <span>
+                      {facts.collectedAt ? new Date(facts.collectedAt).toLocaleTimeString('ko-KR') : NO_VALUE}
+                      {facts.stale ? ' · 통신두절' : ''}
+                    </span>
+                  </button>
+                ))}
+                {alertRacks.length === 0 && (
                   <div className="incident-empty">
-                    장애 목록은 아직 netis-fms와 연동되지 않았습니다 (GET /api/tickets).
-                    {zone && zone.alertRackCount > 0
-                      ? ` 현재 판정이 정상이 아닌 랙 ${zone.alertRackCount}대 — 랙을 클릭해 상세를 확인하세요.`
-                      : ''}
+                    {zone
+                      ? 'netis-fms 판정이 정상이 아닌 랙이 없습니다.'
+                      : '랙 집계를 기다리는 중입니다.'}
+                    {' '}장비 단위 장애 목록(담당자·조치 상태)은 FMS 티켓 연동 후 표시됩니다 (GET /api/tickets).
                   </div>
                 )}
               </div>
@@ -1974,7 +1600,7 @@ function DataCenterDashboard({
         <span className="dashboard-toggle-icon" aria-hidden="true"><i /><i /><i /><i /></span>
         <span className="dashboard-toggle-copy"><small>SERVER ROOM</small><strong>DASHBOARD</strong></span>
         <span className={zone && zone.alertRackCount > 0 ? 'dashboard-alert-count active' : 'dashboard-alert-count'}>
-          <i />{zone ? `${zone.alertRackCount} ALERT RACKS` : `${NO_VALUE} ALERTS`}
+          <i />{zone ? `${zone.alertRackCount} ALERT RACKS` : `${NO_VALUE} ALERT RACKS`}
         </span>
         <span className="dashboard-chevron" aria-hidden="true">{open ? '⌄' : '⌃'}</span>
       </button>
@@ -2005,11 +1631,16 @@ function RetryButton({
   busy,
   className,
   children,
+  icon,
+  kicker,
 }: {
   onRetry: () => void
   busy: boolean
   className?: string
   children: string
+  /** 주면 상단바 버튼 형태(아이콘 + 2줄 카피)로 렌더한다. 없으면 글자만. */
+  icon?: ReactNode
+  kicker?: string
 }) {
   const [coolingDown, setCoolingDown] = useState(false)
 
@@ -2029,7 +1660,17 @@ function RetryButton({
         onRetry()
       }}
     >
-      {coolingDown ? '잠시 후 다시 시도' : children}
+      {icon ? (
+        <>
+          <span className="theme-toggle-icon" aria-hidden="true">{icon}</span>
+          <span className="theme-toggle-copy">
+            <small>{kicker}</small>
+            <strong>{coolingDown ? '잠시 후 다시' : children}</strong>
+          </span>
+        </>
+      ) : (
+        coolingDown ? '잠시 후 다시 시도' : children
+      )}
     </button>
   )
 }
@@ -2100,6 +1741,40 @@ function SessionNotice({
   )
 }
 
+/**
+ * 씬 랙 목록 — **값이 안 바뀐 랙은 이전 객체를 그대로 돌려준다.**
+ *
+ * 랙 목록 폴링(30초)과 u맵 스윕(랙 1건마다)이 각각 새 배열을 만들기 때문에, 신원을 값에
+ * 묶지 않으면 `RackData` 객체가 초당 두 번씩 바뀐다. 그러면 `focusRack`을 의존성으로 쓰는
+ * `CameraController`의 effect가 계속 재실행되어 **카메라 전이(0.85초)가 영원히 끝나지 않고
+ * 마우스·휠·WASD가 전부 먹히지 않는다**(스윕이 도는 18초 내내 + 300초마다 반복).
+ *
+ * ref를 렌더 중에 쓰면 `react-hooks/refs`에 걸리므로, 이 저장소가 이미 쓰는
+ * "렌더 중 상태 조정" 패턴(`usePolledResource`)으로 캐시를 상태에 둔다.
+ */
+function useSceneRacks(
+  zoneRacks: RackSummary[] | null,
+  placements: Map<string, RackPlacement>,
+  uMaps: RackUMap[] | null,
+): RackData[] {
+  const build = (cache: Map<string, RackCacheEntry>) => {
+    const built = zoneRacks ? buildRacksFromZone(zoneRacks, placements, uMaps) : []
+    return reuseUnchangedRacks(cache, built)
+  }
+
+  const [state, setState] = useState(() => {
+    const result = build(new Map<string, RackCacheEntry>())
+    return { zoneRacks, placements, uMaps, ...result }
+  })
+
+  if (state.zoneRacks !== zoneRacks || state.placements !== placements || state.uMaps !== uMaps) {
+    const result = build(state.cache)
+    setState({ zoneRacks, placements, uMaps, ...result })
+  }
+
+  return state.racks
+}
+
 function preloadSceneAssets() {
   useGLTF.preload(assetUrl('models/rack-42u.glb'), GLTF_USE_DRACO, GLTF_USE_MESHOPT)
   useGLTF.preload(assetUrl(`models/dell-poweredge-r760.glb?v=${MODEL_VERSION}`), GLTF_USE_DRACO, GLTF_USE_MESHOPT)
@@ -2123,11 +1798,10 @@ function App() {
   /** 저장된 3D 배치를 다시 읽어야 할 때 올린다(에디터 저장 직후). */
   const [placementVersion, setPlacementVersion] = useState(0)
   const [focusedRackId, setFocusedRackId] = useState<string | null>(null)
-  const [selectedServer, setSelectedServer] = useState<ServerData | null>(null)
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(null)
   const [dashboardOpen, setDashboardOpen] = useState(false)
   const [incidentMode, setIncidentMode] = useState(false)
   const [heatmapMode, setHeatmapMode] = useState<HeatmapMode>('normal')
-  const [incidentRecords, setIncidentRecords] = useState<Record<string, IncidentRecord>>(() => ({ ...initialIncidentRecords }))
 
   // ── netis-fms 세션·데이터 ─────────────────────────────────────────────────
   const sessionReady = session.status === 'ready'
@@ -2158,23 +1832,35 @@ function App() {
   const racksResource = usePolledResource(rackFetcher, RACK_POLL_INTERVAL_MS)
   const zoneRacks = racksResource.data
 
+  /**
+   * 랙 U 배치(구조) — **ZONE 진입 시 1회만** 받는다(`repeat: false`).
+   *
+   * 텔레메트리(위 `racksResource`, 30초)와 성격이 다르다: 랙 안 자산 구성은 **누가 FMS에서
+   * 자산을 등록·이동·해체할 때만** 바뀌고, 관제 화면이 그걸 30초 안에 알아야 할 이유가 없다.
+   * 그래서 자동 재수집 경로를 두지 않는다 — 주기 타이머도, 값 비교 트리거도 없다.
+   *
+   * ⚠️ **트레이드오프(의도된 선택이다)**: 화면을 며칠 켜두면 구조가 낡을 수 있다. 낡는 것은
+   * "어떤 장비가 몇 번 U에 있나"뿐이고, 온습도·전력·경보·통신두절은 계속 최신이다.
+   * 낡은 구조는 상단바 **"지금 새로고침"**이나 전산실을 나갔다 다시 들어오는 것으로 해소한다.
+   * 자동 감지를 넣지 않은 것은 빠뜨린 게 아니라 정한 것이다.
+   *
+   * `UMAP_RETRY_INTERVAL_MS`는 **실패 재시도 간격**으로만 쓰인다(성공하면 더 안 받는다).
+   */
+  const uMapFetcher = useMemo(
+    () => (sessionReady && selectedZoneId !== null ? () => fetchZoneUMaps(selectedZoneId) : null),
+    [sessionReady, selectedZoneId],
+  )
+  const uMapResource = usePolledResource(uMapFetcher, UMAP_RETRY_INTERVAL_MS, { repeat: false })
+  const uMaps = uMapResource.data
+
   /** 저장된 3D 배치(에디터 저장 시 placementVersion이 올라가 다시 읽는다). */
   const placements = useMemo(
     () => readPlacements(selectedZoneId, placementVersion),
     [selectedZoneId, placementVersion],
   )
 
-  /** FMS 랙 목록(SSOT) + 로컬 3D 배치. 랙 내부 장비(U맵)는 S1 범위 밖이라 비어 있다. */
-  const racks = useMemo(
-    () => (zoneRacks ? buildRacksFromZone(zoneRacks, placements) : []),
-    [zoneRacks, placements],
-  )
-
-  /**
-   * 장비 단위(u맵) 데이터가 아직 없는 상태인가.
-   * 랙은 있는데 servers가 전부 비어 있으면 "장애 0건"이 아니라 "모르는 상태"다.
-   */
-  const serverDataUnavailable = racks.length > 0 && racks.every((rack) => rack.servers.length === 0)
+  /** FMS 랙 목록(SSOT) + 로컬 3D 배치 + ZONE u맵. 값이 안 바뀐 랙은 객체 신원을 유지한다. */
+  const racks = useSceneRacks(zoneRacks, placements, uMaps)
 
   /** 3D 씬의 랙 경보 표시에 쓰는 FMS 판정 맵. */
   const rackSeverities = useMemo(() => {
@@ -2199,15 +1885,34 @@ function App() {
     () => (focusedRackId ? racks.find((rack) => rack.id === focusedRackId) ?? null : null),
     [racks, focusedRackId],
   )
+  /**
+   * 선택한 장비도 **랙과 같은 규칙**으로 id에서 재조회한다.
+   * 객체 스냅샷으로 들고 있으면, 상세를 열어 둔 채 u맵 스윕에서 그 자산이 삭제·이동됐을 때
+   * 사라진 자산의 값을 계속 표시하고 카메라도 옛 `startU`로 맞춘다.
+   */
+  const selectedServer = useMemo(
+    () => (focusedRack && selectedServerId
+      ? focusedRack.servers.find((server) => server.id === selectedServerId) ?? null
+      : null),
+    [focusedRack, selectedServerId],
+  )
 
-  const focusedRackMetrics = useMemo(() => focusedRack ? getRackMetrics(focusedRack) : null, [focusedRack])
-  const dashboardMetrics = useMemo(() => getDashboardMetrics(racks), [racks])
   const heatmapDataset = useMemo(() => getHeatmapDataset(racks, heatmapMode, rackFactsById), [racks, heatmapMode, rackFactsById])
   const activeHeatmapMode = heatmapMode === 'normal' ? null : heatmapMode
-  const activeIncidentIndex = selectedServer
-    ? dashboardMetrics.alerts.findIndex(({ server }) => server.id === selectedServer.id)
+
+  /** FMS 판정이 NORMAL이 아닌 랙 — 경보 탐색기·대시보드 표가 함께 쓴다(같은 소스여야 수가 안 갈린다). */
+  const alertRacks = useMemo<RackAlertEntry[]>(() => {
+    const entries: RackAlertEntry[] = []
+    racks.forEach((rack) => {
+      const facts = rackFactsById.get(rack.id)
+      if (facts && facts.severity !== 'NORMAL') entries.push({ rack, facts })
+    })
+    const order: Record<RackSeverity, number> = { CRITICAL: 0, MAJOR: 1, CAUTION: 2, NORMAL: 3 }
+    return entries.sort((a, b) => order[a.facts.severity] - order[b.facts.severity])
+  }, [racks, rackFactsById])
+  const activeIncidentIndex = focusedRackId
+    ? alertRacks.findIndex(({ rack }) => rack.id === focusedRackId)
     : -1
-  const selectedIncidentRecord = selectedServer && selectedServer.status !== 'healthy' ? incidentRecords[selectedServer.id] : undefined
   /**
    * 상단 데이터 피드 상태 — 랙 폴링의 실제 결과를 그대로 반영한다.
    * 값이 한 번도 안 들어왔거나 갱신이 실패 중이면 LIVE라고 말하지 않는다.
@@ -2225,12 +1930,59 @@ function App() {
       }
     }
     if (!at) return { tone: 'stale', label: '연결 중', detail: 'netis-fms 응답 대기 중' }
+    // 텔레메트리는 최신인데 구조(u맵)만 못 받은 경우도 LIVE라고 단언하지 않는다 —
+    // 화면의 장비 목록·U 배치가 실제와 다를 수 있다는 사실은 알려야 한다.
+    if (uMapResource.failure) {
+      return { tone: 'stale', label: 'LIVE · 구조 미갱신', detail: `랙 U 배치를 갱신하지 못했습니다 · 측정값 갱신 ${time}` }
+    }
     return { tone: 'live', label: 'LIVE', detail: `마지막 갱신 ${time}` }
   })()
 
+  /**
+   * 수동 갱신 — **측정값과 구조를 함께** 다시 받는다.
+   *
+   * 구조(u맵)는 자동 재수집 경로가 없으므로(진입 시 1회), 이 버튼이 사용자가 구조를 갱신할 수
+   * 있는 **유일한 수단**이다. 랙 목록만 새로 받으면 "자산을 옮겼는데 화면이 그대로"가 된다.
+   * 각 자원의 연타 쿨다운(5초)은 폴링 훅이 각각 강제한다.
+   */
+  const refreshFromFms = () => {
+    racksResource.retryNow()
+    uMapResource.retryNow()
+  }
+
+  /** 상단바 "IN RACKS" — 랙 내 자산 합(가짜 0 방지 헬퍼 경유). */
+  const topbarRackAssetCount = zoneAggregate
+    ? displayRackAssetCount(zoneAggregate.rackAssetCount, zoneAggregate.mountedAssetCount)
+    : null
   const focusedRackFacts = focusedRack ? rackFactsById.get(focusedRack.id) ?? null : null
   const focusedRackOccupancy = rackOccupancyPercent(focusedRackFacts)
   const focusedRackAvailable = rackAvailableUnits(focusedRackFacts)
+  /**
+   * 연속 빈 구간(U). **랙 크기를 모르면 null** — 42U를 가정하면 20U 랙에 "22U 여유"가 뜬다(C6).
+   * u맵을 아직 못 받았어도 null이다("빈 랙"과 "모름"은 다르다).
+   */
+  const focusedRackFreeBlock = focusedRack && focusedRack.uMapKnown
+    ? largestFreeBlock(focusedRack.servers, focusedRackFacts?.rackUnits ?? null)
+    : null
+  /**
+   * u맵 응답을 한 번이라도 받았는가 — 배치 엔드포인트는 전량 성공/실패라, 랙 단위 "부분 실패"
+   * 개념이 없어졌다. 대신 갈라야 할 것은 셋이다:
+   * ① 아직 못 받음(로딩/실패) ② 받았는데 이 랙이 응답에 없음 ③ 받았고 갱신만 실패(옛값 표시).
+   */
+  const uMapReceived = uMaps !== null
+  /** 랙 내 전체 자산 수(`categoryCounts` 합) — `assetCount`(U 배정분)와 정의가 다르다. */
+  const focusedRackAssetCount = focusedRackFacts
+    ? displayRackAssetCount(
+        Object.values(focusedRackFacts.categoryCounts ?? {}).reduce((total, count) => total + count, 0),
+        focusedRackFacts.assetCount,
+      )
+    : null
+  const focusedRackUnmounted = focusedRackFacts
+    ? unmountedAssetCount(focusedRackAssetCount, focusedRackFacts.assetCount)
+    : null
+  const focusedRackCategories = focusedRackFacts
+    ? Object.entries(focusedRackFacts.categoryCounts ?? {}).sort((a, b) => b[1] - a[1])
+    : []
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -2251,52 +2003,45 @@ function App() {
   /** 에디터는 localStorage 배치만 바꾼다. 랙 자체는 FMS가 SSOT라 다시 읽어 반영한다. */
   const handleEditorSave = () => {
     setPlacementVersion((current) => current + 1)
-    setSelectedServer(null)
+    setSelectedServerId(null)
     setIncidentMode(false)
     setView('monitor')
   }
 
   const clearFocus = () => {
     setFocusedRackId(null)
-    setSelectedServer(null)
+    setSelectedServerId(null)
     setIncidentMode(false)
   }
   const handleFocusRack = (rack: RackData) => {
     setFocusedRackId(rack.id)
-    setSelectedServer(null)
+    setSelectedServerId(null)
     setDashboardOpen(false)
     setIncidentMode(false)
   }
   const handleSelectServer = (rack: RackData, server: ServerData) => {
     setFocusedRackId(rack.id)
-    setSelectedServer(server)
+    setSelectedServerId(server.id)
     setDashboardOpen(false)
-    setIncidentMode(server.status !== 'healthy')
   }
-  const focusIncident = (index: number) => {
-    if (dashboardMetrics.alerts.length === 0) {
+  /** 경보 랙 탐색 — 대상은 FMS 판정이 정상이 아닌 랙이다. */
+  const focusAlertRack = (index: number) => {
+    if (alertRacks.length === 0) {
       setIncidentMode(false)
       return
     }
-    const normalizedIndex = (index % dashboardMetrics.alerts.length + dashboardMetrics.alerts.length) % dashboardMetrics.alerts.length
-    const incident = dashboardMetrics.alerts[normalizedIndex]
-    handleSelectServer(incident.rack, incident.server)
+    const normalizedIndex = (index % alertRacks.length + alertRacks.length) % alertRacks.length
+    setFocusedRackId(alertRacks[normalizedIndex].rack.id)
+    setSelectedServerId(null)
+    setDashboardOpen(false)
+    setIncidentMode(true)
   }
   const toggleIncidentMode = () => {
     if (incidentMode) {
       setIncidentMode(false)
       return
     }
-    focusIncident(activeIncidentIndex >= 0 ? activeIncidentIndex : 0)
-  }
-  const updateSelectedIncident = (patch: Partial<IncidentRecord>) => {
-    if (!selectedServer) return
-    setIncidentRecords((current) => {
-      const existing = current[selectedServer.id] ?? {
-        detectedAt: '—', duration: '—', acknowledged: false, assignee: 'UNASSIGNED', note: '',
-      }
-      return { ...current, [selectedServer.id]: { ...existing, ...patch } }
-    })
+    focusAlertRack(activeIncidentIndex >= 0 ? activeIncidentIndex : 0)
   }
 
   if (showSplash) {
@@ -2384,11 +2129,40 @@ function App() {
           </span>
           <span className="theme-toggle-copy"><small>FLOOR PLAN</small><strong>LAYOUT EDIT</strong></span>
         </button>
+        {/*
+          구조(u맵)는 진입 시 1회만 받으므로 **상시 노출되는 갱신 수단이 필요하다.**
+          예전에는 실패 화면 안에만 재시도 버튼이 있어, 정상 상태에서 자산 배치가 바뀌면
+          페이지를 새로 여는 것 말고 방법이 없었다.
+        */}
+        <RetryButton
+          className="theme-toggle refresh-button"
+          onRetry={refreshFromFms}
+          busy={racksResource.loading || uMapResource.loading}
+          kicker="NETIS-FMS"
+          icon={(
+            <svg viewBox="0 0 24 24">
+              <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+              <path d="M20 4v5h-5" />
+            </svg>
+          )}
+        >
+          지금 새로고침
+        </RetryButton>
         <ThemeToggle theme={theme} onToggle={toggleTheme} className="rack-theme-toggle" />
         <div className="summary">
-          <span><strong>{racks.length}</strong> RACKS</span>
-          {/* 장비 수는 FMS 랙 집계의 assetCount 합. 3D 씬의 servers(u맵 미연동)를 세지 않는다. */}
-          <span><strong>{zoneAggregate ? zoneAggregate.assetCount : NO_VALUE}</strong> ASSETS</span>
+          {/* 랙 수도 미수신 상태에서는 0을 단언하지 않는다 — 옆 칸과 같은 규칙(C6). */}
+          <span><strong>{zoneRacks ? racks.length : NO_VALUE}</strong> RACKS</span>
+          {/*
+            자산 수 두 개는 정의가 다르다(§11-11 Q1) — 라벨을 나눠 함께 띄운다.
+            ASSETS = 랙 내 활성 자산 전체(categoryCounts 합), MOUNTED = U가 배정된 자산(assetCount 합).
+            하나만 띄우면 랙 상세의 수와 어긋난 이유를 사용자가 알 수 없다.
+          */}
+          <span title="랙 내 활성 자산 전체 (U 미배정 문짝 센서·PDU 포함). 랙 밖에 놓인 CRAC·UPS 등은 여기 없다 — 로비의 ZONE ASSETS가 그쪽까지 포함한 수다">
+            <strong>{topbarRackAssetCount ?? NO_VALUE}</strong> IN RACKS
+          </span>
+          <span title="U가 배정되어 랙에 장착된 자산">
+            <strong>{zoneAggregate ? zoneAggregate.mountedAssetCount : NO_VALUE}</strong> MOUNTED
+          </span>
           {/*
             N-3: 예전엔 하드코딩 'LIVE'라 타임아웃·429 정지·권한없음 상태에서도 초록불이 켜져 있었다.
             "가짜 정상"은 가짜 0과 같은 계열의 사고다(C6) — 실제 폴링 상태에 묶는다.
@@ -2451,7 +2225,7 @@ function App() {
               {racksResource.nextAttemptAt && (
                 <small>다음 자동 갱신 {racksResource.nextAttemptAt.toLocaleTimeString('ko-KR')}</small>
               )}
-              <RetryButton onRetry={racksResource.retryNow} busy={racksResource.loading}>
+              <RetryButton onRetry={refreshFromFms} busy={racksResource.loading}>
                 지금 새로고침
               </RetryButton>
             </div>
@@ -2463,13 +2237,12 @@ function App() {
         <IncidentNavigator
           active={incidentMode}
           hidden={dashboardOpen}
-          alerts={dashboardMetrics.alerts}
-          unavailable={serverDataUnavailable}
+          alerts={alertRacks}
+          unavailable={zoneRacks === null}
           currentIndex={activeIncidentIndex}
-          records={incidentRecords}
           onToggle={toggleIncidentMode}
-          onPrevious={() => focusIncident((activeIncidentIndex >= 0 ? activeIncidentIndex : 0) - 1)}
-          onNext={() => focusIncident((activeIncidentIndex >= 0 ? activeIncidentIndex : -1) + 1)}
+          onPrevious={() => focusAlertRack((activeIncidentIndex >= 0 ? activeIncidentIndex : 0) - 1)}
+          onNext={() => focusAlertRack((activeIncidentIndex >= 0 ? activeIncidentIndex : -1) + 1)}
         />
 
         <HeatmapControl
@@ -2487,12 +2260,10 @@ function App() {
             <ServerDetailPanel
               rack={focusedRack}
               server={selectedServer}
-              incident={selectedIncidentRecord}
-              onBackToRack={() => { setSelectedServer(null); setIncidentMode(false) }}
+              onBackToRack={() => setSelectedServerId(null)}
               onOverview={clearFocus}
-              onUpdateIncident={updateSelectedIncident}
             />
-          ) : focusedRack && focusedRackMetrics ? (
+          ) : focusedRack ? (
             <>
               <p className="panel-title">RACK DETAIL</p>
               <div className="rack-focus-heading">
@@ -2500,16 +2271,16 @@ function App() {
                 {/* 판정은 FMS 원값(severity)이 SSOT다. 로컬 서버 상태는 u맵 미연동이라 항상 0이었다. */}
                 <span className={focusedRackFacts && focusedRackFacts.severity !== 'NORMAL' ? 'rack-state attention' : 'rack-state healthy'}>
                   <i /> {focusedRackFacts
-                    ? (focusedRackFacts.severity === 'NORMAL' ? 'HEALTHY' : severityLabels[focusedRackFacts.severity] ?? focusedRackFacts.severity)
+                    ? (focusedRackFacts.severity === 'NORMAL' ? 'HEALTHY' : severityLabel(focusedRackFacts.severity))
                     : NO_VALUE}
                 </span>
               </div>
               <span className="rack-focus-meta">FRONT · LEVEL VIEW</span>
 
               {/*
-                **이 패널의 U 수치는 전부 FMS 집계에서만 파생한다.**
-                로컬 계산값(getRackMetrics)은 u맵 미연동이라 servers가 비어 있어
-                "OCCUPIED 20U / AVAILABLE 42U"처럼 한 화면에서 모순된 숫자를 낸다.
+                **점유·여유 U는 FMS 집계(RackSummary)에서만 파생한다.** 같은 수치를 u맵에서
+                다시 세면 두 소스가 갈릴 때 한 화면에 다른 숫자가 뜬다. u맵은 FMS 집계로 낼 수
+                없는 것(연속 빈 구간·U별 배치)에만 쓴다.
                 크기(rackUnits) 미설정이면 분모가 없으므로 지어내지 않고 `—`로 둔다(C6).
               */}
               <section className="rack-capacity">
@@ -2536,10 +2307,21 @@ function App() {
                 )}
               </section>
 
+              {/*
+                ⚠️ **자산 수 두 개는 정의가 다르다**(§11-11 Q1, FMS 확정):
+                - MOUNTED = `RackSummary.assetCount` = U가 배정된 활성 자산(= u맵 목록과 같은 모집단)
+                - IN RACK = `categoryCounts` 합 = 랙 내 활성 자산 전체(문짝 온습도센서·PDU 등 U 미배정 포함)
+                둘 중 하나만 "ASSETS"로 띄우면 다른 화면의 수와 어긋난 이유를 알 수 없다 —
+                라벨을 나누고 아래 캡션에서 차이를 밝힌다.
+              */}
               <div className="rack-stat-grid">
-                <div>
-                  <span>ASSETS</span>
-                  <strong>{focusedRackFacts ? focusedRackFacts.assetCount : NO_VALUE}</strong>
+                <div title="U가 배정되어 랙에 장착된 자산 수 (netis-fms assetCount)">
+                  <span>MOUNTED</span>
+                  <strong>{focusedRackFacts ? focusedRackFacts.assetCount : NO_VALUE}<small> 대</small></strong>
+                </div>
+                <div title="U 미배정(문짝 센서·PDU 등)을 포함한 랙 내 활성 자산 전체 (netis-fms categoryCounts)">
+                  <span>IN RACK</span>
+                  <strong>{focusedRackAssetCount ?? NO_VALUE}<small> 대</small></strong>
                 </div>
                 <div>
                   <span>OCCUPIED</span>
@@ -2550,12 +2332,20 @@ function App() {
                   <strong>{focusedRackAvailable ?? NO_VALUE}<small> U</small></strong>
                 </div>
                 <div>
-                  {/* 연속 빈 구간은 U별 배치(u맵)를 알아야 계산된다 — 점유 U 합계로는 낼 수 없다. */}
+                  <span>RACK SIZE</span>
+                  <strong>{focusedRackFacts?.rackUnits ?? NO_VALUE}<small> U</small></strong>
+                </div>
+                <div>
+                  {/* 연속 빈 구간은 U별 배치(u맵) + 랙 크기를 둘 다 알아야 계산된다. */}
                   <span>MAX BLOCK</span>
-                  <strong>{NO_VALUE}</strong>
+                  <strong>{focusedRackFreeBlock ?? NO_VALUE}<small> U</small></strong>
                 </div>
               </div>
-              <p className="rack-source-note">MAX BLOCK(연속 빈 구간)은 랙 U맵 연동 후 표시됩니다.</p>
+              <p className="rack-source-note">
+                MOUNTED는 U가 배정된 자산 수, IN RACK은 U 미배정(문짝 센서·PDU 등)까지 포함한
+                랙 내 활성 자산 전체입니다 — 두 수가 다를 수 있습니다.
+                {focusedRackUnmounted !== null ? ` 이 랙은 U 미배정 자산 ${focusedRackUnmounted}대가 있습니다.` : ''}
+              </p>
 
               {/*
                 netis-fms 랙 집계(E19 B1). 랙에 TH/DPM 센서가 없으면 값이 null로 온다 —
@@ -2587,7 +2377,7 @@ function App() {
                   </div>
                   <div className={focusedRackFacts && focusedRackFacts.severity !== 'NORMAL' ? 'alert' : ''}>
                     <span>SEVERITY</span>
-                    <strong>{focusedRackFacts ? severityLabels[focusedRackFacts.severity] ?? focusedRackFacts.severity : NO_VALUE}</strong>
+                    <strong>{focusedRackFacts ? severityLabel(focusedRackFacts.severity) : NO_VALUE}</strong>
                   </div>
                 </div>
                 <p className="rack-source-note">
@@ -2599,71 +2389,117 @@ function App() {
               </section>
 
               {/*
-                장비 단위 상태(healthy/warning/critical/offline)와 U별 배치도는 둘 다 u맵이 있어야
-                나온다. servers가 비어 있는 지금 그대로 그리면 "전 장비 정상 0대"·"전 U 비어 있음"이라는
-                거짓 화면이 된다 — 소스가 붙기 전까지는 그리지 않고 미연동임을 밝힌다(C6).
+                랙 내 자산 구성 — `categoryCounts` 실값(랙 내 전체 자산 기준).
+                예전 이 자리에는 장비 상태 4분류(healthy/warning/critical/offline) 집계가 있었는데
+                그 값은 시드 데이터였고 netis-fms에 대체 소스가 없다(A6 = b) — 되살리지 않는다.
               */}
-              {focusedRackMetrics.orderedServers.length > 0 ? (
-                <>
-                  <section className="rack-health">
-                    <p className="rack-subtitle">HEALTH</p>
-                    <div className="rack-health-grid">
-                      {(Object.keys(statusColors) as ServerStatus[]).map((status) => (
-                        <span key={status}>
-                          <i style={{ background: statusColors[status], boxShadow: `0 0 8px ${statusColors[status]}` }} />
-                          {status}<strong>{focusedRackMetrics.statusCounts[status]}</strong>
-                        </span>
-                      ))}
-                    </div>
-                  </section>
-
-                  <RackUnitMap rack={focusedRack} onSelectServer={(server) => handleSelectServer(focusedRack, server)} />
-                </>
-              ) : (
-                <section className="rack-health">
-                  <p className="rack-subtitle">U MAP · HEALTH</p>
+              <section className="rack-health">
+                <p className="rack-subtitle">RACK CONTENTS · 카테고리</p>
+                {focusedRackCategories.length > 0 ? (
+                  <div className="rack-health-grid">
+                    {focusedRackCategories.map(([category, count]) => (
+                      <span key={category}>
+                        <i style={{ background: '#4acdf8', boxShadow: '0 0 8px #4acdf8' }} />
+                        {category}<strong>{count}</strong>
+                      </span>
+                    ))}
+                  </div>
+                ) : (
                   <p className="rack-source-note">
-                    랙 U 배치도와 장비 상태는 아직 netis-fms와 연동되지 않았습니다
-                    (GET /api/racks/&#123;id&#125;/u-map).
+                    {focusedRackFacts ? '이 랙에 등록된 활성 자산이 없습니다.' : '랙 집계를 기다리는 중입니다.'}
                   </p>
-                </section>
-              )}
+                )}
+                <p className="rack-source-note">
+                  장비 단위 상태(정상·경고·장애)는 netis-fms가 수집하지 않습니다(IT 장비 텔레메트리 미도입).
+                </p>
+              </section>
 
               <section className="rack-equipment">
                 <p className="rack-subtitle">INSTALLED EQUIPMENT</p>
                 {/*
-                  랙 내부 장비(U맵)는 `GET /api/racks/{id}/u-map`으로 가져와야 하며 S1 범위 밖이다.
-                  값이 없을 때 0대·빈 목록처럼 보이지 않도록 미연동임을 밝힌다(C6·C7).
+                  u맵을 아직 못 받은 랙은 **"0대"가 아니라 "모름"** 이다(C6) —
+                  `uMapKnown`으로 구분한다. 빈 목록을 장비 없음으로 표시하면 가짜 0과 같다.
                 */}
-                {focusedRackMetrics.orderedServers.length === 0 && (
-                  <p className="rack-source-note">
-                    장착 장비 목록은 아직 netis-fms와 연동되지 않았습니다
-                    {focusedRackFacts ? ` (FMS 등록 자산 ${focusedRackFacts.assetCount}대).` : '.'}
+                {/*
+                  받아 둔 값이 있는데 갱신이 실패한 경우 — **옛 목록을 지우지 않되 낡았다고 밝힌다.**
+                  관제 화면에서 목록이 통째로 사라지는 편이 더 나쁘고(3D 씬의 장비도 함께 사라진다),
+                  가짜 0도 아니다. 다만 실패를 숨긴 채 옛값을 보여주는 것은 별개의 문제라 표시한다.
+                */}
+                {focusedRack.uMapKnown && uMapResource.failure && (
+                  <p className="rack-source-note warn">
+                    ⚠ 갱신 실패 — 아래는 마지막으로 받은 U 배치입니다.
+                    {uMapResource.lastUpdatedAt
+                      ? ` (수신 ${uMapResource.lastUpdatedAt.toLocaleTimeString('ko-KR')})`
+                      : ''}
                   </p>
                 )}
-                <div className="equipment-list">
-                  {focusedRackMetrics.orderedServers.map((server) => (
-                    <button
-                      className="equipment-item"
-                      key={server.id}
-                      type="button"
-                      onClick={() => handleSelectServer(focusedRack, server)}
-                      aria-label={`${server.name} 상세 보기`}
-                    >
-                      <span className="equipment-unit">{formatUnitRange(server)}</span>
-                      <span className="equipment-copy">
-                        <strong>{server.name}</strong>
-                        <small>{serverModelLabels[server.model]}</small>
-                      </span>
-                      <span className="equipment-status" title={server.status}>
-                        <i style={{ background: statusColors[server.status], boxShadow: `0 0 8px ${statusColors[server.status]}` }} />
-                        {server.units}U
-                      </span>
-                      <span className="equipment-open" aria-hidden="true">›</span>
-                    </button>
-                  ))}
-                </div>
+                {!focusedRack.uMapKnown ? (
+                  <p className="rack-source-note">
+                    {!uMapReceived
+                      ? (uMapResource.failure
+                          ? '랙 U 배치를 불러오지 못했습니다. 상단 "지금 새로고침"으로 다시 시도하세요.'
+                          : '랙 U 배치를 불러오는 중입니다…')
+                      /*
+                        응답은 왔는데 이 랙이 그 응답에 없다. u맵은 진입 시 1회만 받고 랙 목록은
+                        30초마다 갱신되므로, **진입 후 netis-fms에 새로 등록된 랙**이면 정상적으로
+                        여기 온다 — 우리가 그 뒤로 다시 묻지 않았을 뿐이다. FMS 이상으로 단정하지
+                        않는다(모르는 원인을 아는 척하지 않는다). "장비 0대"로도 단정하지 않는다(C6).
+                      */
+                      : '이 랙의 U 배치를 아직 받지 못했습니다(진입 후 추가된 랙일 수 있습니다). 상단 "지금 새로고침"으로 다시 받아보세요.'}
+                  </p>
+                ) : focusedRack.servers.length === 0 ? (
+                  <p className="rack-source-note">
+                    U가 배정된 장비가 없습니다.
+                    {focusedRackUnmounted !== null
+                      ? ` (U 미배정 자산 ${focusedRackUnmounted}대는 위 RACK CONTENTS에 있습니다.)`
+                      : ''}
+                  </p>
+                ) : (
+                  <div className="equipment-list">
+                    {focusedRack.servers.map((server) => (
+                      <button
+                        className="equipment-item"
+                        key={server.id}
+                        type="button"
+                        onClick={() => handleSelectServer(focusedRack, server)}
+                        aria-label={`${server.name} 상세 보기`}
+                      >
+                        <span className="equipment-unit">{formatUnitRange(server)}</span>
+                        <span className="equipment-copy">
+                          {/* 표시 문구는 전부 FMS 원값이다. 없는 제조사·모델명을 지어내지 않는다. */}
+                          <strong>{server.name}</strong>
+                          <small>{[server.manufacturer, server.modelName].filter(Boolean).join(' ') || NO_VALUE}</small>
+                        </span>
+                        <span className="equipment-status" title={`${server.units}U · ${server.assetCode}`}>
+                          {server.units}U
+                        </span>
+                        <span className="equipment-open" aria-hidden="true">›</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </section>
+
+              {/*
+                U 배치도는 **랙 크기(rackUnits)를 알 때만** 그린다.
+                미설정 랙에서 지오메트리용 폴백 42U로 그리면 "1U–42U RACK MAP"이 지어낸 값이 된다(C6).
+              */}
+              {focusedRack.uMapKnown && focusedRackFacts?.rackUnits
+                ? (
+                  <RackUnitMap
+                    rack={focusedRack}
+                    rackUnits={focusedRackFacts.rackUnits}
+                    onSelectServer={(server) => handleSelectServer(focusedRack, server)}
+                  />
+                )
+                : focusedRack.uMapKnown && (
+                  <section className="rack-health">
+                    <p className="rack-subtitle">U MAP</p>
+                    <p className="rack-source-note">
+                      netis-fms에 랙 크기(U)가 설정되어 있지 않아 U 배치도를 그리지 않습니다.
+                    </p>
+                  </section>
+                )}
 
               <button className="overview-button" type="button" onClick={clearFocus}>
                 <span aria-hidden="true">←</span> 전체 보기
@@ -2697,8 +2533,15 @@ function App() {
           </div>
         ) : (
           <div className={`legend${dashboardOpen ? ' dashboard-open' : ''}`} aria-hidden={dashboardOpen}>
-            {(Object.entries(statusColors) as [ServerStatus, string][]).map(([status, color]) => (
-              <span key={status}><i style={{ background: color, boxShadow: `0 0 10px ${color}` }} />{status}</span>
+            {/*
+              범례의 소스는 FMS 랙 판정(severity)이다. 예전 장비 상태 4분류는 시드 값이었다.
+              등급 3단계 → 화면 2톤 매핑은 E19 C1 합의를 따른다(MAJOR·CAUTION → WARNING).
+            */}
+            {(['normal', 'warning', 'critical'] as SeverityTone[]).map((tone) => (
+              <span key={tone}>
+                <i style={{ background: severityToneColors[tone], boxShadow: `0 0 10px ${severityToneColors[tone]}` }} />
+                {tone === 'normal' ? '정상' : tone === 'warning' ? '주의·경고' : '심각'}
+              </span>
             ))}
           </div>
         )}
@@ -2706,16 +2549,14 @@ function App() {
         <DataCenterDashboard
           open={dashboardOpen}
           onToggle={() => setDashboardOpen((current) => !current)}
-          onSelectIncident={handleSelectServer}
+          onSelectAlertRack={handleFocusRack}
           dataCenter={selectedDataCenter}
           zone={zoneAggregate}
           rackFacts={rackFactsById}
           lastUpdatedAt={racksResource.lastUpdatedAt}
           racks={racks}
-          metrics={dashboardMetrics}
-          incidentRecords={incidentRecords}
-          activeIncidentServerId={incidentMode ? selectedServer?.id ?? null : null}
-          theme={theme}
+          alertRacks={alertRacks}
+          activeAlertRackId={focusedRackId}
         />
       </section>
     </main>

@@ -22,6 +22,19 @@ VITE_FMS_ORIGIN=http://localhost:8777 npm run dev              # rack3d를 스�
 | `hang` | sidebar 무응답 — 로비 로딩 타임아웃(20초) 확인 |
 | `racks-hang` | racks 무응답 — 씬 상태·`LIVE` 뱃지가 `갱신 실패`로 바뀌는지 확인 |
 | `scope-denied` | 위치 스코프 밖 404 — "권한 없음" 수렴 확인 |
+| `umap-fail` | ZONE u맵 500 — "불러오지 못했습니다" + 상단 `LIVE · 구조 미갱신` 확인 |
+| `umap-hang` | ZONE u맵 무응답 — 20초 타임아웃 뒤 실패 전환 확인 |
+| `umap-empty` | ZONE u맵 `200 []` — 랙은 있는데 항목이 없다. "장비 0대"로 단정하지 않는지 확인 |
+| `umap-partial` | A-01만 응답에서 누락 — "netis-fms가 이 랙의 U 배치를 반환하지 않았습니다" 확인 |
+| `category-missing` | A-02 `categoryCounts` 필드 부재(`assetCount` 3) — "랙 내 자산"이 `0`이 아니라 `—`, "U 미배정 −3대" 같은 음수가 안 나오는지 확인 |
+
+`EXTRA_RACKS=<n>`으로 합성 랙을 덧붙인다(예: `EXTRA_RACKS=31` → 총 36대).
+**랙 수가 많을 때만 드러나는 것**(3D 렌더 비용, 폴링 중 카메라 조작, 배치 응답 크기)을
+재현하는 용도다 — UAT 실데이터는 랙이 2대뿐이라 이 경로가 안 보인다.
+
+`TOKEN_TTL`(초, 기본 900)로 액세스 토큰 수명을 줄이면 **선제 갱신(①)을 초 단위로 관측**할 수 있다.
+`TOKEN_TTL=90` 이면 만료 60초 전 + 바닥값 30초 규칙에 따라 **탭이 보이는 동안 30초마다** refresh가 나가고,
+탭을 숨기면 멈춰야 한다(C11).
 
 ### 픽스처가 가르는 네 경우 (C6 — 가짜 0 금지)
 
@@ -35,6 +48,16 @@ VITE_FMS_ORIGIN=http://localhost:8777 npm run dev              # rack3d를 스�
 | A-03 | **센서 없음** (`temp`/`humidity`/`powerKw` = `null`) | **`—`** + 히트맵 중립 회색 |
 | A-04 | **랙 크기 미설정** (`rackUnits` = `null`) + 통신두절(`stale`) | 점유율 `—`, 42U를 지어내지 않는다 |
 | A-05 | **참인 0** (`temp`/`humidity`/`powerKw` = `0`) | **`0`** — `—`가 아니다 |
+
+### 랙 u맵 픽스처 (`GET /api/zones/{zoneId}/u-maps` — ZONE 일괄)
+
+| 랙 | u맵 | 기대 표시 |
+|---|---|---|
+| A-01 | 9대 / 20U, 제조사 Dell·HPE·Cisco·Synology·null 혼재 | 제조사·모델은 **FMS 원값**, 미등록은 `—`. 3D 형상은 근사 |
+| A-02 | 3대 / 8U | 4U 자산이 2U GLB를 늘려 실제 높이로 |
+| A-03 | **0대(수신 완료)** | "U가 배정된 장비가 없습니다" — "불러오는 중"이 아니다 |
+| A-04 | 2대 / 5U인데 **랙 크기 미설정** | **U 배치도를 그리지 않는다**(폴백 42U 누출 금지). MAX BLOCK `—` |
+| A-05 | 1대, `lifecycleStatus: REPAIR` | 생애주기는 중립 배지로 원값 표기(건강 상태 아님) |
 
 ### ⚠️ 한계
 

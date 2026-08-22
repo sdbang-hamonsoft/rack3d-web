@@ -400,7 +400,9 @@ function LayoutEditor({
                   && !isTileFree(drag.currentX, drag.currentZ, rack.id)
                 const isSnapback = snapback?.rackId === rack.id
                 const classes = ['layout-editor-rack']
-                if (rack.servers.length === 0) classes.push('empty')
+                // u맵을 아직 못 받은 랙은 "비어 있음"이 아니라 "모름"이다(C6) —
+                // 받은 뒤에 실제로 0대일 때만 empty로 칠한다.
+                if (rack.uMapKnown && rack.servers.length === 0) classes.push('empty')
                 if (selectedRackId === rack.id) classes.push('selected')
                 if (isDragging && drag.moved) classes.push('dragging')
                 if (dragCollision) classes.push('collision')
@@ -429,12 +431,12 @@ function LayoutEditor({
                     }}
                     onClick={() => { if (!saved) selectRack(rack.id) }}
                     aria-pressed={selectedRackId === rack.id}
-                    aria-label={`랙 ${rack.label}, X ${rack.tileX}, Z ${rack.tileZ}, 서버 ${rack.servers.length}대, 선택`}
+                    aria-label={`랙 ${rack.label}, X ${rack.tileX}, Z ${rack.tileZ}, 장착 장비 ${rack.uMapKnown ? `${rack.servers.length}대` : '미상'}, 선택`}
                     title={`${rack.label} · X ${rack.tileX} / Z ${rack.tileZ}`}
                   >
                     <span className="layout-editor-rack-name">{rack.label}</span>
                     <span className="layout-editor-rack-sub">
-                      {rack.servers.length > 0 ? `${rack.servers.length} SRV` : 'EMPTY'}
+                      {!rack.uMapKnown ? '—' : rack.servers.length > 0 ? `${rack.servers.length} DEV` : 'EMPTY'}
                     </span>
                     <span className={`layout-editor-rack-front ${facing}`} aria-hidden="true" />
                   </button>
@@ -476,10 +478,10 @@ function LayoutEditor({
               </section>
 
               {/*
-                랙 크기·장착 수는 netis-fms가 SSOT다.
-                `totalUnits`는 3D 지오메트리용 폴백(미설정 시 42U)이라 여기 그대로 쓰면
-                크기 미설정 랙에 42U를 지어내게 된다 — 원값 `rackUnits`를 쓰고 없으면 `—`(C6).
-                장착 장비 수도 랙 U맵 미연동이라 항상 0이므로 표시하지 않는다.
+                랙 크기는 netis-fms가 SSOT다 — 원값 `rackUnits`를 쓰고 미설정이면 `—`(C6).
+                (예전에는 옆에 지오메트리용 폴백 `totalUnits`(미설정 시 42U)가 있어 그걸 쓰면
+                42U를 지어내게 됐는데, 그 필드는 읽는 곳이 없어져 제거했다.)
+                장착 장비 수는 위 랙 타일이 u맵 수신 여부와 함께 표시한다.
               */}
               <span className="layout-editor-rack-meta">
                 RACK SIZE {selectedRack.rackUnits ?? '—'}U

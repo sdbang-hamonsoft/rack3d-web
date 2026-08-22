@@ -5,7 +5,7 @@
  */
 
 import { ApiError, api, NETWORK_ERROR_STATUS } from './client'
-import type { MeResponse, RackSummary, SidebarNode, SidebarResponse } from './types'
+import type { MeResponse, RackSummary, RackUMap, SidebarNode, SidebarResponse } from './types'
 
 /** `GET /api/auth/me` — 사용자·권한 요약(인증만 필요). */
 export function fetchMe(): Promise<MeResponse> {
@@ -28,6 +28,27 @@ export function fetchZoneRacks(zoneId: number): Promise<RackSummary[]> {
     return Promise.reject(new ApiError(NETWORK_ERROR_STATUS, 'INVALID_ZONE_ID'))
   }
   return api.get<RackSummary[]>(`/zones/${zoneId}/racks`)
+}
+
+/**
+ * `GET /api/zones/{zoneId}/u-maps` — ZONE 하위 **모든 랙**의 U 배치를 한 번에 (ASSET READ).
+ *
+ * 랙 1대당 1요청이던 `/racks/{id}/u-map`을 대체한다(§11-19). 랙 36대짜리 전산실에서
+ * 36요청 순차 스윕이 **1요청**이 되면서, 스윕을 굴리던 기계(커서·간격·부분 실패·중복 가드)가
+ * 통째로 필요 없어졌다.
+ *
+ * 각 요소의 `assets`는 **U가 배정된 활성 자산만**이다(§11-11 Q1). 랙 내 전체 자산 수는
+ * `RackSummary.categoryCounts`가 SSOT이며 두 수는 정의가 달라 화면에서 라벨을 나눈다.
+ *
+ * 랙이 없는 ZONE은 `200 []`, 없는·스코프 밖 ZONE은 `404`다(실측).
+ *
+ * C5 신뢰 경계: `zoneId`는 **sidebar 응답이 준 id만** 넘긴다.
+ */
+export function fetchZoneUMaps(zoneId: number): Promise<RackUMap[]> {
+  if (!Number.isInteger(zoneId) || zoneId <= 0) {
+    return Promise.reject(new ApiError(NETWORK_ERROR_STATUS, 'INVALID_ZONE_ID'))
+  }
+  return api.get<RackUMap[]>(`/zones/${zoneId}/u-maps`)
 }
 
 // ── 사이드바 트리 → 전산실(ZONE) 목록 ────────────────────────────────────────
