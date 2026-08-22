@@ -38,6 +38,12 @@
 
 ## 완료
 
+- [x] 2026-08-22 `rack3d.burunet.co.kr` 구도메인 폐쇄 (제품 오너 실행)
+  - 확인: DNS 응답 없음, HTTPS 연결 불가. 신 경로 `https://fms.burunet.co.kr/rack3d/` 는 200 정상
+  - §11-4 에서 합의한 순서대로 진행됐다 — ① rack3d 배포 → ② FMS 프록시·메뉴 연결 → ③ 실동작 확인 → ④ 폐쇄
+  - 구도메인으로는 애초에 인증이 성립하지 않았다(`NETIS_RT` 가 `SameSite=Strict`·`Path=/api/auth` 라 다른 오리진에 실리지 않는다). 공격 표면만 남아 있던 상태였다
+
+
 - [x] 2026-08-22 3D 배치 좌표를 FMS로 이관 (E18)
   - 계기: 제품 오너가 FMS 레이아웃 설정에서 랙 위치를 바꿔도 rack3d 에 반영되지 않는다고 보고. **버그가 아니라 미구현**이었다 — 좌표를 전부 `localStorage` 에서 읽고 있었다
   - `GET /api/layouts/zones/{id}/layout` 소비. 그리드 상수(`GRID_COLUMNS 18`·`GRID_ROWS 14`·`TILE_SIZE 0.6`)를 버리고 **ZONE 별 `grid{cols,rows,tileMm,ceilingMm}` 수용** — 실제로 ZONE 10 은 12×8, ZONE 19 는 18×14 로 다르다

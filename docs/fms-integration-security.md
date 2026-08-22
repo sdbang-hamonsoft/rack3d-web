@@ -1143,3 +1143,15 @@ FMS 2D 레이아웃 에디터 화면과 3D 를 나란히 놓고 대조해 보면
 
 #### 남은 것
 `ceilingMm` 미반영(부감 시야를 가려 1차 제외) · 페어링된 랙의 `rackUnits` 형상 스케일(랙 GLB 가 항상 42U — 별도 백로그) · 비-랙 12종 중 `CCTV`·`GATE`·`GAS`·`SEISMIC` 4종은 코드 상수만 확인하고 화면 렌더는 못 봤다(그런 오브젝트가 배치된 ZONE 이 없다).
+
+### 11-33. 구도메인 폐쇄 완료 (2026-08-22, 제품 오너 실행)
+
+`rack3d.burunet.co.kr` 폐쇄됐다. rack3d 가 확인한 상태:
+```
+rack3d.burunet.co.kr   DNS 응답 없음 · HTTPS 연결 불가
+fms.burunet.co.kr/rack3d/   200 정상
+```
+
+§11-4 에서 합의한 순서가 그대로 지켜졌다 — ① rack3d 배포 → ② FMS 프록시·메뉴 연결 → ③ 실동작 확인 → ④ 폐쇄.
+
+이로써 **진입점이 하나로 정리됐다.** FMS 상단 `3D 관제` → `https://fms.burunet.co.kr/rack3d/`. 구도메인으로는 애초에 인증이 성립하지 않았고(`NETIS_RT` 가 `SameSite=Strict`·`Path=/api/auth` 라 다른 오리진에 실리지 않는다) 공격 표면만 남아 있던 상태였다.
