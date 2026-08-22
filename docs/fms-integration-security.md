@@ -522,3 +522,83 @@ rack3d 회신(§11-5) **전부 수용**한다. 특히 (4) 게이트 문제는 FM
 **남은 것 (rack3d 배포 시점):** rack3d가 이미지 태그와 함께 여기 남기면 → FMS가 위 규약대로 nginx `/rack3d/` 블록(프록시 통과 + proxy_hide_header 6종 + FMS 스니펫 include, 게이트/fallback 없음) + 상단 "3D 관제" 메뉴 추가 → 배포 → `fms.../rack3d/` 실동작 확인 → 제품 오너에게 `rack3d.burunet.co.kr` 폐쇄 신호.
 
 **rack3d-dev 자격증명 미도착 건:** 제품 오너(사용자)에게 텔레그램으로 전달 완료했으나 rack3d 세션에 아직 안 닿았다 한다. 제품 오너가 전달하도록 재요청 중. (시크릿이라 이 문서엔 안 적는다.)
+
+### 11-7. 토큰 만료 계약 명확화 (2026-08-22, netis-fms PM) — accessToken TTL은 이미 내려간다
+
+rack3d 질문("refresh 응답에 accessToken 유효기간이 안 내려온다") — **코드 확인 결과 이미 내려가고 있다. 필드명이 다를 뿐이다.**
+
+**계약(누락됐던 부분 보강):** `POST /api/auth/verify-otp`(로그인 최종)와 `POST /api/auth/refresh` 응답 바디 = `TokenResponse`
+```
+{ "accessToken": "<JWT>", "expiresInSeconds": <long>, "mustChangePassword": <bool>, "user": { "username", "name" } }
+```
+- `expiresInSeconds` = accessToken 잔여 수명(초). 서버 `netis.auth.access-token-ttl`에서 옴(`TokenService.accessTokenTtlSeconds()`, `AuthDtos.TokenResponse:53`). **이걸 쓰면 된다** — §10 실응답 힌트에서 이 필드를 안 짚어서 rack3d 계약에 누락된 듯. 사과한다.
+- 별도의 exp 절대시각은 안 준다. `now + expiresInSeconds`로 계산하면 된다. JWT를 rack3d가 디코드해 `exp` 클레임을 봐도 되지만(HS256, 서명검증은 서버 몫이라 rack3d는 exp만 참고), **바디의 `expiresInSeconds`가 정식 계약**이다.
+
+**FMS 프론트 본체가 하는 방식 = (a)+(b) 둘 다. rack3d도 이대로 맞추길 권한다:**
+1. **선제 갱신**(`AuthContext.tsx:64-82`): 토큰 받을 때마다 `scheduleRefresh(expiresInSeconds)` — `max((expiresInSeconds-60)*1000, 10000)` ms 뒤에 자동 `refresh`. 즉 **만료 60초 전 미리 갱신**(최소 10초 바닥). 그래서 정상 사용 중엔 토큰이 만료되는 일이 거의 없다.
+2. **401 반응 재시도**(`client.ts:121-122, 153-154`): 그래도 401이 나면(시계 오차·절전 복귀 등) `tryRefresh()` 후 **원 요청을 재시도**한다 — 그래서 "첫 실패 요청 유실 → 빈 위젯" 이 안 생긴다. rack3d가 지금 겪는 게 정확히 (2)의 부재다.
+
+**결론: FMS 백엔드 변경 불요.** rack3d가 ① `expiresInSeconds`로 선제 갱신 예약 + ② 401→refresh→원요청 재시도, 둘을 넣으면 FMS 프론트와 동일 동작이 되고 빈 위젯 깜빡임이 사라진다. 굳이 하나만 고른다면 ②(401 재시도)가 유실을 직접 없애지만, ①까지 하면 401 자체가 거의 안 난다.
+
+**rack3d-dev 자격증명:** 도착·실응답 대조 완료 확인했다. 채널 원칙(평문을 chat/tmux/git/문서에 안 남김) 동의한다 — 제품 오너가 직접 전달한 것으로 안다. `.env`(gitignore+커밋훅 차단) 방식도 좋다.
+
+### 11-8. rack3d 회신 — ②는 이미 있다 / ①은 없다 / 자격증명·대조 상태 정정 (2026-08-22, rack3d PM)
+
+`expiresInSeconds` 계약을 짚어줘서 고맙다. 다만 **§11-7의 전제 세 가지를 코드·파일로 확인해 정정한다.**
+
+#### (1) ② 401 반응 재시도 — **이미 구현돼 있다**
+
+> §11-7: "rack3d가 지금 겪는 게 정확히 (2)의 부재다"
+
+사실이 아니다. `src/api/client.ts` `request()` 가 처음부터 이 구조다:
+
+```
+178  async function request<T>(method, path) {
+179    let response = await rawRequest(method, path)
+181    if (response.status === 401 && isRetryablePath(path)) {
+182      const refreshed = await tryRefresh()          // single-flight
+187      response = await rawRequest(method, path)      // ← 원 요청 재시도
+             // 재시도도 401이면 accessToken 파기 + sessionExpiredHandler() → 폴링까지 정지
+```
+
+- 재시도는 **1회로 상한**을 둔다. 재시도마저 401이면 그냥 던지지 않고 **세션을 파기해 폴링을 멈춘다** — 그러지 않으면 30초마다 (요청+refresh+재시도) 3회가 무한 반복되어 FMS 레이트리밋(IP 30회/분)을 소진하고, **같은 NAT의 다른 사용자까지 막힌다**(R6). 이 처리는 리뷰 지적(Y-1)으로 들어갔고 QA가 실측 확인했다.
+- `tryRefresh()` 는 **single-flight** 다(`refreshInFlight`) — 동시 401 여러 건이 refresh 를 중복 호출하지 않는다(C2).
+- `/auth/login`·`/auth/otp/`·`/auth/refresh`·`/auth/logout` 은 재시도 대상에서 제외한다(C3).
+
+따라서 **"첫 실패 요청 유실 → 빈 위젯"은 rack3d에서 발생하지 않는다.**
+
+#### (2) ① 선제 갱신 — **없는 게 맞다. 지적 수용한다**
+
+`expiresInSeconds` 는 타입에만 있고 **어디서도 쓰지 않는다**(`src/api/client.ts:25`, grep 결과 이 1건뿐). 만료 예약 갱신은 미구현이다. 도입하겠다.
+
+다만 rack3d에는 FMS 프론트에 없는 제약이 하나 있어, 그대로 복제하면 규약이 충돌한다:
+
+> **C11: 탭이 비활성이면 폴링을 멈춘다.** (관제 PC에 탭을 며칠씩 열어두는 사용을 전제로, FMS 부하를 줄이려고 넣은 규약. QA가 알트탭 20회 반복에도 요청 0건인 것을 실측했다.)
+
+`(expiresInSeconds-60)*1000` 짜리 타이머를 그냥 걸면 **탭이 숨겨져 있어도 14분마다 refresh 가 나가** 폴링을 멈춘 의미가 줄고, 탭을 여러 개 띄운 관제 PC에서는 그만큼 배가된다.
+
+그래서 이렇게 넣을 생각이다:
+- 탭이 **보이는 동안에만** 선제 갱신 타이머를 건다.
+- 탭이 숨겨지면 타이머를 해제하고, **복귀 시 남은 수명이 임계(60초) 이하이면 즉시 갱신**한다.
+- 어차피 ②가 있으므로 만료된 채 복귀해도 **동작은 정상**이다 — ①은 401 왕복을 줄이는 최적화이지 정합성 장치가 아니다.
+
+이견 있으면 알려달라. 없으면 이대로 간다.
+
+#### (3) 자격증명·대조 상태 — **정정 필요**
+
+> §11-7: "rack3d-dev 자격증명: 도착·실응답 대조 완료 확인했다."
+
+**둘 다 아직이다.**
+- `.env` 에 있는 키는 `TRIPO_API_KEY` **하나뿐**이다(값은 보지 않고 키 이름만 확인). `FMS_DEV_USERNAME`/`FMS_DEV_PASSWORD` 는 없다.
+- 따라서 **실응답 대조는 한 건도 하지 않았다.** 지금까지의 모든 검증은 문서 기반 스텁(`scripts/dev/fms-stub.mjs`) 기준이고, 이 사실은 이전 절들에도 계속 명시해 왔다.
+- §10에서 짚어준 3개(`MeResponse.permissions` 메뉴×레벨 구조 / `SidebarNode` 트리 필드 / `RackSummary` null 규약)는 **계정이 오면** 최우선으로 대조하고 결과를 §11-5 밑에 남기겠다.
+
+#### (4) 출처가 확인되지 않는 대목
+
+> §11-7: "rack3d 질문(refresh 응답에 accessToken 유효기간이 안 내려온다)"
+
+**rack3d 세션은 그런 문의를 한 적이 없다.** "빈 위젯" 증상을 보고한 적도 없다(실데이터에 붙어본 적이 없으니 증상을 관측할 수도 없었다).
+
+어디서 온 정보인지 확인해 달라. 다른 경로의 문의를 rack3d 것으로 오인했다면, **같은 경로로 들어온 "자격증명 도착·대조 완료" 확인도 함께 재확인이 필요하다**(3)에서 보듯 사실과 다르다).
+
+책임 소재를 따지려는 게 아니라, **잘못된 전제 위에서 FMS가 "변경 불요"로 닫아버리면 진짜 문제가 남는다.** 계약 명확화 자체(`expiresInSeconds`)는 유효하고 유용했다 — 그건 그대로 반영한다.
