@@ -16,6 +16,9 @@
  *   A-04 랙 크기 미설정(rackUnits = null) + 통신두절(stale)
  */
 import { createServer } from 'node:http'
+import { createHash } from 'node:crypto'
+import { readFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
 
 const PORT = Number(process.env.PORT ?? 8777)
 const SCENARIO = process.env.SCENARIO ?? 'ok'
@@ -67,6 +70,54 @@ const racks = [
  * 제조사는 일부러 섞었다 — Dell/HPE/Cisco(우리 GLB 3종)·Synology(미보유)·null(미등록).
  * **null 필드는 화면에서 `—`로 나와야 한다**(지어내면 안 된다, C6·C7).
  */
+/**
+ * 자산 실물 사진(E17). **저장소 밖 디렉터리**에서 읽는다.
+ *
+ * 사진을 저장소에 두지 않는 이유가 둘이다. ① rack3d 는 사진을 스스로 갖지 않고 netis-fms 에서만
+ * 받는다(D1) — 저장소에 두면 그 원칙이 코드가 아니라 말로만 남는다. ② 저장소가 공개라
+ * CC BY-SA 이미지를 커밋하면 저작자 표시 의무가 저장소 전체로 번진다.
+ *
+ * 디렉터리가 없으면 **사진 없는 상태로 정상 동작한다** — 사진은 검증 편의지 스텁의 전제가 아니다.
+ * 준비 방법은 그 디렉터리의 README.md 참조.
+ */
+const PHOTO_DIR = process.env.PHOTO_DIR ?? '/Volumes/ext-ssd/build-artifacts/rack3d/device-photos'
+
+/** 자산 id → 앞/뒤 사진 파일. `null` 은 **그 면이 없는 자산**(요청이 아예 나가면 안 된다). */
+const PHOTO_MAP = {
+  101: { FRONT: 'hp-proliant-dl385g7_front.jpg', REAR: 'zfs-server_rear.jpg' },
+  102: { FRONT: 'hp-proliant-dl380g6_front.jpg', REAR: 'via-nsr7800_rear.jpg' },
+  103: { FRONT: 'cisco-nexus-93180yc_front.jpg', REAR: null },
+  106: { FRONT: 'cisco-pix515e_front.jpg', REAR: 'cisco-pix515e_rear.jpg' },
+  107: { FRONT: 'dell-poweredge-1950_front.jpg', REAR: null },
+  108: { FRONT: 'dell-powervault-124t_front.jpg', REAR: null },
+}
+
+/** id → { FRONT: {bytes, sha256, ...} | null, REAR: ... }. 없는 면과 못 읽은 파일은 똑같이 null 이다. */
+const photos = {}
+for (const [id, faces] of Object.entries(PHOTO_MAP)) {
+  photos[id] = { FRONT: null, REAR: null }
+  for (const view of ['FRONT', 'REAR']) {
+    const file = faces[view]
+    if (!file) continue
+    const path = join(PHOTO_DIR, file)
+    if (!existsSync(path)) continue
+    const bytes = readFileSync(path)
+    photos[id][view] = {
+      bytes,
+      meta: {
+        view,
+        contentType: 'image/jpeg',
+        byteSize: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        uploadedAt: '2026-08-23T00:00:00Z',
+      },
+    }
+  }
+}
+const photoCount = Object.values(photos).reduce((n, f) => n + (f.FRONT ? 1 : 0) + (f.REAR ? 1 : 0), 0)
+/** 사진이 하나도 없으면 `hasFront`/`hasRear` 를 켜면 안 된다 — 없는 줄 알면서 404를 받아내는 요청이 된다. */
+const hasPhoto = (id, view) => Boolean(photos[id]?.[view])
+
 const asset = (o) => ({
   id: 0, assetCode: 'STUB-000', name: '장비', category: 'SERVER', monitoringType: null,
   manufacturer: null, modelName: null, serialNo: null, spec: null, ip: null,
@@ -76,14 +127,14 @@ const asset = (o) => ({
 const uMaps = {
   // A-01 — 9대 / 20U. 제조사 3사 + Synology + null 혼재.
   11: [
-    asset({ id: 101, assetCode: 'STUB-A01-1', name: 'DB 서버 #1', manufacturer: 'Dell', modelName: 'PowerEdge R750', serialNo: 'SN-D-1', ip: '10.0.0.11', rackStartU: 19, rackEndU: 20, hasFront: true, hasRear: true }),
-    asset({ id: 102, assetCode: 'STUB-A01-2', name: 'DB 서버 #2', manufacturer: 'HPE', modelName: 'ProLiant DL380', serialNo: 'SN-H-2', ip: '10.0.0.12', rackStartU: 17, rackEndU: 18 }),
-    asset({ id: 103, assetCode: 'STUB-A01-3', name: '코어 스위치', category: 'NETWORK', manufacturer: 'Cisco', modelName: 'Catalyst 9300', ip: '10.0.0.13', rackStartU: 16, rackEndU: 16 }),
+    asset({ id: 101, assetCode: 'STUB-A01-1', name: 'DB 서버 #1', manufacturer: 'HP', modelName: 'ProLiant DL385 G7', serialNo: 'SN-H-1', ip: '10.0.0.11', rackStartU: 19, rackEndU: 20, hasFront: hasPhoto(101, 'FRONT'), hasRear: hasPhoto(101, 'REAR') }),
+    asset({ id: 102, assetCode: 'STUB-A01-2', name: 'DB 서버 #2', manufacturer: 'HP', modelName: 'ProLiant DL380 G6', serialNo: 'SN-H-2', ip: '10.0.0.12', rackStartU: 17, rackEndU: 18, hasFront: hasPhoto(102, 'FRONT'), hasRear: hasPhoto(102, 'REAR') }),
+    asset({ id: 103, assetCode: 'STUB-A01-3', name: '코어 스위치', category: 'NETWORK', manufacturer: 'Cisco', modelName: 'Nexus 93180YC-EX', ip: '10.0.0.13', rackStartU: 16, rackEndU: 16, hasFront: hasPhoto(103, 'FRONT'), hasRear: hasPhoto(103, 'REAR') }),
     asset({ id: 104, assetCode: 'STUB-A01-4', name: '스토리지 어레이', manufacturer: 'Synology', modelName: 'RS4021xs+', rackStartU: 12, rackEndU: 15 }),
     asset({ id: 105, assetCode: 'STUB-A01-5', name: '제조사 미등록 서버', rackStartU: 10, rackEndU: 11 }),
-    asset({ id: 106, assetCode: 'STUB-A01-6', name: '워커 #1', manufacturer: 'Dell', modelName: 'PowerEdge R650', rackStartU: 9, rackEndU: 9 }),
-    asset({ id: 107, assetCode: 'STUB-A01-7', name: '워커 #2', manufacturer: 'Dell', modelName: 'PowerEdge R650', rackStartU: 8, rackEndU: 8 }),
-    asset({ id: 108, assetCode: 'STUB-A01-8', name: '백업 노드', manufacturer: 'HPE', modelName: 'ProLiant DL360', rackStartU: 5, rackEndU: 6 }),
+    asset({ id: 106, assetCode: 'STUB-A01-6', name: '워커 #1', manufacturer: 'Cisco', modelName: 'PIX 515E', rackStartU: 9, rackEndU: 9, hasFront: hasPhoto(106, 'FRONT'), hasRear: hasPhoto(106, 'REAR') }),
+    asset({ id: 107, assetCode: 'STUB-A01-7', name: '워커 #2', manufacturer: 'Dell', modelName: 'PowerEdge 1950', rackStartU: 8, rackEndU: 8, hasFront: hasPhoto(107, 'FRONT'), hasRear: hasPhoto(107, 'REAR') }),
+    asset({ id: 108, assetCode: 'STUB-A01-8', name: '백업 노드', manufacturer: 'Dell', modelName: 'PowerVault 124T', rackStartU: 5, rackEndU: 6, hasFront: hasPhoto(108, 'FRONT'), hasRear: hasPhoto(108, 'REAR') }),
     asset({ id: 109, assetCode: 'STUB-A01-9', name: 'KVM 콘솔', category: 'ETC', rackStartU: 1, rackEndU: 4 }),
   ],
   // A-02 — 3대 / 8U
@@ -286,7 +337,51 @@ createServer((req, res) => {
   if (/^\/api\/layouts\/zones\/\d+\/layout$/.test(req.url ?? '')) {
     return json(404, { code: 'NOT_FOUND', message: '없음' })
   }
+
+  // ── 자산 실물 사진(E17) ────────────────────────────────────────────────────
+  const [imgPath, imgQuery = ''] = (req.url ?? '').split('?')
+
+  const metaMatch = /^\/api\/assets\/(\d+)\/images$/.exec(imgPath)
+  if (metaMatch) {
+    if (SCENARIO === 'photo-meta-fail') return json(500, { code: 'INTERNAL', message: '실패' })
+    const faces = photos[metaMatch[1]] ?? { FRONT: null, REAR: null }
+    // 없는 면은 **null 이다.** 다른 면으로 대신 채우면 앞면 사진이 뒷면에 붙는다(C6).
+    return json(200, { front: faces.FRONT?.meta ?? null, rear: faces.REAR?.meta ?? null })
+  }
+
+  const fileMatch = /^\/api\/assets\/(\d+)\/images\/(FRONT|REAR)$/.exec(imgPath)
+  if (fileMatch) {
+    if (SCENARIO === 'photo-fail') return json(500, { code: 'INTERNAL', message: '실패' })
+    if (SCENARIO === 'photo-hang') return // 응답하지 않는다 — 사진 요청 타임아웃 확인용
+    const face = photos[fileMatch[1]]?.[fileMatch[2]]
+    if (!face) return json(404, { code: 'NOT_FOUND', message: '없음' })
+
+    // FMS main-b8bc839 의 캐시 정책(§11-15)을 그대로 흉내 낸다.
+    // `v` 가 있으면 URL 자체가 내용에 묶이므로 1년 immutable, 없으면 3600초 + ETag 재검증.
+    // **고정 URL 에 immutable 을 걸면 안 된다** — 사진을 갈아끼워도 옛 바이트가 계속 나온다.
+    const versioned = new URLSearchParams(imgQuery).has('v')
+    const etag = `"${face.meta.sha256}"`
+    if (!versioned && req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { ETag: etag, 'Cache-Control': 'private, max-age=3600' })
+      return res.end()
+    }
+    res.writeHead(200, {
+      'Content-Type': face.meta.contentType,
+      'Content-Length': face.meta.byteSize,
+      ETag: etag,
+      'Cache-Control': versioned
+        ? 'private, max-age=31536000, immutable'
+        : 'private, max-age=3600',
+    })
+    return res.end(face.bytes)
+  }
+
   return json(404, { code: 'NOT_FOUND', message: '없음' })
-}).listen(PORT, () => console.log(`fms-stub on :${PORT} (SCENARIO=${SCENARIO})`))
+}).listen(PORT, () => {
+  console.log(`fms-stub on :${PORT} (SCENARIO=${SCENARIO})`)
+  console.log(photoCount > 0
+    ? `  장비 사진 ${photoCount}장 — ${PHOTO_DIR}`
+    : `  장비 사진 없음 (${PHOTO_DIR} 없음) — hasFront/hasRear 는 전부 false 로 나간다`)
+})
 
 process.on('SIGTERM', () => { console.log('\n--- 요청 로그 ---\n' + log.join('\n')); process.exit(0) })

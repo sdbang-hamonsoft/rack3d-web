@@ -34,6 +34,10 @@ VITE_FMS_ORIGIN=http://localhost:8777 npm run dev              # rack3d를 스�
 | `layout-orphan` | 랙 목록에 없는 RACK 오브젝트(`rack: null` 1건 + 미등록 `locationId` 1건) — 랙이 아니라 색 박스로 그려지는지 확인(실측 ZONE 19 재현) |
 | `layout-tile1000` | `tileMm 1000` · 10×6 그리드 — 그리드 상수 하드코딩이 남아 있지 않은지 확인 |
 
+| `photo-meta-fail` | `GET /assets/{id}/images` 500 — 메타 실패가 사진 없는 상태로 수렴하는지(씬은 살아 있어야 한다) |
+| `photo-fail` | 사진 바이트 500 — 실패 쿨다운이 걸리는지, 같은 면을 무한 재요청하지 않는지 |
+| `photo-hang` | 사진 무응답 — 동시 4건 슬롯이 막힌 채 남지 않는지 |
+
 `EXTRA_RACKS=<n>`으로 합성 랙을 덧붙인다(예: `EXTRA_RACKS=31` → 총 36대).
 **랙 수가 많을 때만 드러나는 것**(3D 렌더 비용, 폴링 중 카메라 조작, 배치 응답 크기)을
 재현하는 용도다 — UAT 실데이터는 랙이 2대뿐이라 이 경로가 안 보인다.
@@ -78,6 +82,28 @@ VITE_FMS_ORIGIN=http://localhost:8777 npm run dev              # rack3d를 스�
 | `POWER`·`UNKNOWN_KIND` 는 `label: ''` | 표시명이 **`type` 으로 대체**되는지(지어내지 않는다) |
 | `UNKNOWN_KIND` | **FMS 가 나중에 type 을 늘린 상황** — 회색 박스 + type 레이블로 넘어가야 하고 씬이 깨지면 안 된다 |
 
+### 장비 실물 사진 (E17)
+
+`PHOTO_DIR`(기본 `/Volumes/ext-ssd/build-artifacts/rack3d/device-photos`)에서 읽어
+`GET /api/assets/{id}/images`(메타)와 `.../images/{FRONT|REAR}`(바이트)를 FMS 계약대로 서빙한다.
+**디렉터리가 없으면 사진 없는 상태로 정상 동작한다** — `hasFront`/`hasRear` 가 전부 `false` 로 나가고,
+그러면 rack3d 는 이미지 엔드포인트를 **한 번도 부르지 않는다**(그게 맞는 동작이다).
+
+사진을 저장소에 두지 않는 이유가 둘이다. ① rack3d 는 사진을 스스로 갖지 않고 netis-fms 에서만
+받는다(D1). ② 저장소가 공개라 CC BY-SA 이미지를 커밋하면 저작자 표시 의무가 저장소로 번진다.
+사진 준비 방법과 출처·라이선스는 그 디렉터리의 `README.md` 에 있다.
+
+캐시 헤더도 FMS `main-b8bc839` 와 같게 흉내 낸다 — `?v=` 있으면 `max-age=31536000, immutable`,
+없으면 `max-age=3600` + ETag(`If-None-Match` 에 304). 고정 URL 에 immutable 을 걸면 사진을
+갈아끼워도 옛 바이트가 계속 나온다는 것이 이 설계의 요지다(§11-15).
+
+| 자산 | 사진 | 확인 대상 |
+|---|---|---|
+| 101 (2U) | 앞 HP DL385 G7 · 뒤 2U 후면 | 앞뒤가 뒤바뀌지 않는지, 뒷면 UV 반전이 맞는지 |
+| 103 (1U) | **앞면만** | 뒷면 요청이 **0건**인지(`hasRear:false` 를 믿는가) |
+| 106 (1U) | 앞·뒤 **같은 장비**(Cisco PIX 515E) | 유일한 진짜 앞뒤 쌍 — 앞뒤 대조는 여기서 한다 |
+| 104·105·109 | 없음 | 메타 요청조차 나가지 않는지 |
+
 ### ⚠️ 한계
 
 이것은 **문서(`E19-rack3d-dashboard-api-request.md` §I, FMS DTO)대로 만든 모형**이지 실제 FMS가 아니다.
@@ -91,3 +117,19 @@ Chrome DevTools Protocol을 직접 쓰는 최소 클라이언트(의존성 0).
 > **훅과 렌더 동작은 순수 함수 테스트로 잡히지 않는다.**
 > 실제로 `tsc`·`eslint`·단위 테스트를 전부 통과한 상태에서 무한 렌더가 나간 적이 있고,
 > 화면을 띄워보고서야 발견했다. 렌더 경로를 바꿨으면 반드시 띄워서 확인할 것.
+
+스텝은 `{eval}`(JS 실행) · `{wait}`(밀리초) · `{shot: '/절대경로.png'}`(화면 캡처) 셋이다.
+**3D 는 DOM 으로 확인되지 않는다** — 사진이 실제로 붙었는지, 무엇이 가렸는지는 떠 봐야 안다.
+
+헤드리스에서 WebGL 을 쓰려면 SwiftShader 를 켜야 한다. `--disable-gpu` 만 주면 캔버스가
+새까맣게 나오고 "안 붙었다"로 오독하기 쉽다.
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --headless=new --remote-debugging-port=9222 --window-size=1600,900 \
+  --use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader \
+  --user-data-dir=<임시 프로필> http://localhost:5173/rack3d/
+```
+
+**임시 프로필은 쓰고 나면 지운다.** 실 FMS 로 로그인해 확인한 경우 그 디렉터리에 운영 세션
+쿠키(`NETIS_RT`)가 남는다.

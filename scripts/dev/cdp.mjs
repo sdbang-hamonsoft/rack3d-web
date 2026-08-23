@@ -1,6 +1,7 @@
 // 의존성 없는 최소 CDP 클라이언트 (WebSocket 프레이밍 직접 구현)
 import { createConnection } from 'node:net'
 import { randomBytes } from 'node:crypto'
+import { writeFileSync } from 'node:fs'
 
 const steps = JSON.parse(process.argv[2])
 
@@ -65,6 +66,14 @@ sock.on('data', (chunk) => {
 while (!handshakeDone) await new Promise((r) => setTimeout(r, 20))
 
 let nextId = 1
+/** 임의의 CDP 메서드 호출. `Runtime.evaluate` 외의 것(스크린샷 등)에 쓴다. */
+const send = (method, params = {}, timeoutMs = 20000) => new Promise((resolve, reject) => {
+  const id = nextId++
+  pending.set(id, (msg) => (msg.error ? reject(new Error(JSON.stringify(msg.error))) : resolve(msg.result)))
+  sock.write(encode(JSON.stringify({ id, method, params })))
+  setTimeout(() => { if (pending.has(id)) { pending.delete(id); reject(new Error(`timeout ${method}`)) } }, timeoutMs)
+})
+
 const evaluate = (expression) => new Promise((resolve, reject) => {
   const id = nextId++
   pending.set(id, (msg) => {
@@ -79,6 +88,13 @@ const evaluate = (expression) => new Promise((resolve, reject) => {
 
 for (const step of steps) {
   if (step.wait) { await new Promise((r) => setTimeout(r, step.wait)); continue }
+  if (step.shot) {
+    // 3D 는 DOM 으로 확인이 안 된다 — 눈으로 봐야 하는 것은 화면을 떠 봐야 안다.
+    const { data } = await send('Page.captureScreenshot', { format: 'png' })
+    writeFileSync(step.shot, Buffer.from(data, 'base64'))
+    console.log(`### ${step.label ?? 'shot'}\n${step.shot}\n`)
+    continue
+  }
   const value = await evaluate(step.eval)
   console.log(`### ${step.label}\n${typeof value === 'string' ? value : JSON.stringify(value)}\n`)
 }
