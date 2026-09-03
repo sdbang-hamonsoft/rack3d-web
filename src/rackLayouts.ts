@@ -282,15 +282,21 @@ export const LAYOUT_OBJECT_HEIGHTS_M: Record<string, number> = {
  * 여기 **없는 종류는 지금까지처럼 색 박스**로 그린다(`objectColor`/{@link LAYOUT_OBJECT_HEIGHTS_M}).
  * 모델을 한 번에 다 갖추기 전에도 씬이 온전하려면 두 표현이 공존해야 한다.
  *
- * ⚠️ `BATTERY` 는 **FMS 팔레트에 아직 없다**(신설 요청 중). 여기 미리 넣어 두는 것은 의도다 —
- * `LayoutObject.type` 이 `string` 이라, FMS 가 `BATTERY` 를 내보내기 시작하면 rack3d 를
- * 고치지 않아도 모델이 붙는다. 그때까지 이 줄은 아무 일도 하지 않는다.
+ * ⚠️ **`GAS` 는 가스 소화 설비가 아니라 가스 *감지기* 다.** 여기에 소화 용기 뱅크 모델을
+ * 붙였다가 실데이터에서 잡았다 — FMS 팔레트 정의가 `가스감지 / 가스 감지 / #F57C00`
+ * (`docs/fms-integration-security.md` §11-31 ①)이고, 실 ZONE 의 레이블도 "가스감지"다.
+ * `FIRE`(화재감지)·`WATER`(누수감지)·`SEISMIC`(지진감지)와 나란한 **감지기 계열**이고,
+ * 높이 0.3m 도 그래서 맞는 값이었다. 소화 설비는 팔레트에 **아예 없다**.
+ *
+ * ⚠️ `BATTERY`·`SUPPRESSION` 은 **FMS 팔레트에 없는 종류다**(신설 요청 예정, 이름도 제안일 뿐이다).
+ * 여기 미리 넣어 두는 것은 의도다 — `LayoutObject.type` 이 `string` 이라, FMS 가 내보내기
+ * 시작하면 rack3d 를 고치지 않아도 모델이 붙는다. 그때까지 이 두 줄은 아무 일도 하지 않는다.
  */
 export const LAYOUT_OBJECT_MODELS: Record<string, string> = {
   CRAC: 'precision-ac',
   UPS: 'ups',
-  GAS: 'gas-suppression',
   BATTERY: 'battery-rack',
+  SUPPRESSION: 'gas-suppression',
 }
 
 /**
@@ -306,8 +312,8 @@ export const LAYOUT_OBJECT_MODELS: Record<string, string> = {
 export const LAYOUT_OBJECT_MODEL_HEIGHTS_M: Record<string, number> = {
   CRAC: 1.98,
   UPS: 1.80,
-  GAS: 1.42,
   BATTERY: 1.55,
+  SUPPRESSION: 1.42,
 }
 
 /** 모르는 종류의 박스 높이(m). */
