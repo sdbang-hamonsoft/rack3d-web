@@ -1363,5 +1363,7 @@ rack3d 는 일단 **실치수로 그리고 칸을 넘기기로** 했다. 근거�
 **되돌리기**: `ssh buru-ext '~/cicd/rack3d/deploy.sh main-c050820'`
 (레지스트리에 태그가 남아 있고 ReplicaSet `rack3d-web-6f64c8fd78` 도 있다.)
 
-⚠️ **배포 절차가 저장소에 없다.** 실제 파이프라인은 buru-ext 의 `~/cicd/rack3d/{build,deploy}.{sh,yml}`
-에만 있다. 이번에도 그걸 찾느라 netis-fms 쪽 주석을 거슬러 올라가야 했다. 백로그에 올렸다.
+⚠️ **배포 절차가 저장소에 없었다.** 실제 파이프라인은 buru-ext 의 `~/cicd/rack3d/{build,deploy}.{sh,yml}`
+에만 있어서, 이번에도 그걸 찾느라 netis-fms 쪽 주석을 거슬러 올라가야 했다.
+→ 배포 직후 서버에서 스크립트를 읽어 **`deploy/README.md`** 로 옮겼고, 배포팀이 매번 읽도록
+**`.claude/agents/deployer.md`**(프로젝트 전용 정의)도 함께 만들었다. 다음부터는 그 문서가 출발점이다.
