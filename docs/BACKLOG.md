@@ -4,6 +4,21 @@
 
 ## 할 일
 
+- [ ] 🛠 배치 오브젝트 8종 실사풍 3D 모델 — 색 박스를 대체한다 (E18 ④ 결정 뒤집기)
+  - 대상: 항온항습기(CRAC)·UPS·배터리 랙·온습도(SENSOR)·누수(WATER)·가스 소화(GAS)·화재(FIRE)·도어(DOOR)
+  - 기획·근거·규약: `docs/layout-object-modeling-plan.md`. 레퍼런스: `artifacts/reference/fms-object-3d-guide.jpg`
+  - 제작 방식: **Blender 헤드리스 파이썬 스크립트**(`blender/objects/`). 이미지→3D AI 는 쓰지 않는다
+    (배터리 랙 실측 2,324 tris·125KB·텍스처 0장 vs Tripo 서버 1종 42.7MB)
+  - ✅ 파이프라인 검증 완료 + 2종 제작 — 배터리 랙, 항온항습기(STULZ CyberAir 3 PRO DX 실측 기준)
+  - ⬜ 나머지 6종 — **회사 자료 대기**(제조사·모델명·사이즈·정면/측면/3D 뷰)
+  - ⚠️ 만든 GLB 2개(237KB)가 `public/` 에서 **참조되지 않은 채 배포 이미지에 실린다** — 씬 통합 때 해소
+  - ⬜ 씬 통합(`LayoutObjectMesh`) + 팔레트 색 받침대 + `MODEL_VERSION` 증가 + 이름표 가림 회귀 확인
+  - ✅ 벽걸이·천장형 3종(온습도·누수·화재)은 **기둥 없이 띄운다**(1.2~1.5m). FMS 에 없는 설치물을 지어내지 않는다
+  - ⬜ 확인 1건: 엑셀의 "도어 센서"(마그네틱 접점)와 팔레트 `DOOR`(높이 2.1m 문)가 다른 물건이다
+  - ⬜ FMS 요청 1건: `type` 팔레트에 `BATTERY` 신설 (기존 12종에 배터리 랙이 없다)
+  - ⚠️ 실측으로 드러난 것: 기존 서버 모델 3종은 상세 모델이 아니라 **삼각형 16~18개짜리 상자 + 텍스처**다
+    (`node scripts/dev/glb-stats.mjs public/models/*.glb`)
+
 - [ ] 🛠 확정 대시보드 UI 재구현 — FMS 가능 데이터 기준(D2)
   - `series/zone`(E19 B4) 연동으로 온습도 트렌드 카드 채우기 → 이때 echarts 복원(Q3)
   - 시설 6종·KPI 5카드를 §4 매트릭스의 ✅ 항목으로 재구성

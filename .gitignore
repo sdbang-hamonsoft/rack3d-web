@@ -29,3 +29,9 @@ dist-ssr
 # 로컬 실행 런처 — 절대 경로가 이 머신에만 유효하고, 프로비저닝 스크립트가
 # 재생성한다. 저장소가 공개라 로컬 디렉터리 구조를 굳이 노출할 이유가 없다.
 bot.sh
+
+# Blender 스크립트 캐시
+blender/objects/__pycache__/
+# 검수용 프리뷰 렌더 — `blender/objects/_preview.py` 로 언제든 다시 뽑는다.
+# 재생성되는 4MB 짜리 PNG 를 저장소에 쌓지 않는다(레퍼런스 원본은 artifacts/reference/ 에 남긴다).
+artifacts/renders/
