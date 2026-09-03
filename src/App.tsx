@@ -5,6 +5,7 @@ import * as THREE from 'three'
 import type { Group } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import {
+  LAYOUT_OBJECT_MODELS,
   RACK_BASE_HEIGHT_M,
   RACK_UNIT_HEIGHT_M,
   SERVER_MODEL_UNITS,
@@ -110,7 +111,7 @@ const RACK_INNER_BOTTOM = RACK_BASE_HEIGHT_M
  * 랙만 안 바뀐다"로 나타나고 원인 추적이 오래 걸린다. **URL은 `useGLTF`와
  * `useGLTF.preload` 양쪽이 정확히 같아야** 프리로드가 효과를 낸다(다르면 두 번 받는다).
  */
-const MODEL_VERSION = '11'
+const MODEL_VERSION = '12'
 const SPLASH_DURATION = 3600
 const RACK_FOCUS_HEIGHT = 1.06
 const RACK_FOCUS_DISTANCE = 1.15
@@ -614,31 +615,37 @@ function RackAlert({
   )
 }
 
+/** 바닥 타일은 높이 0.08이 y=0 중심이라 윗면이 0.04다. 배치 오브젝트는 여기서 올라간다. */
+const LAYOUT_OBJECT_BASE_Y = 0.04
+
+/** 팔레트 색 받침대 두께(m). 모델을 이 위에 올린다. */
+const LAYOUT_PLATE_H = 0.012
+
 /**
- * 배치 오브젝트 1건 — **종류별 색 박스 + 레이블**(E18 ④).
+ * 모델이 없는 종류의 표현 — **색 박스 + 모서리 선 + 정면 막대**.
  *
- * 3D 모델은 확보하지 않는다("대강 구분만 되면 된다"). 바닥 점유는 FMS 모델상 **정확히 1타일**이고
- * (§11-31 ②: `zone_layout_object`에 width/depth가 없고 `UNIQUE(zone,x,z)`), 실제 항온항습기가
- * 600mm보다 커도 FMS는 물리 치수를 관리하지 않으므로 여기서 지어내지 않는다.
- *
- * 클릭 핸들러를 달지 않는 것은 의도다 — 이 오브젝트들에는 붙일 상세 데이터가 없고,
- * 핸들러가 있으면 r3f가 `onPointerMissed`(전체 보기 복귀)를 막는다.
+ * 모델이 있는 종류가 늘어도 이 표현은 없어지지 않는다. FMS 가 `type` 을 늘릴 수 있고
+ * (그때 rack3d 를 안 고쳐도 회색 박스로 흘러가야 한다), 모델 로딩 중에도 이게 자리를 지킨다.
  */
-function LayoutObjectMesh({ object, tileSize }: { object: SceneObject; tileSize: number }) {
-  const { placement, heightM } = object
-  // 1타일보다 조금 작게 — 옆 칸과 붙어 한 덩어리로 보이지 않게 칸 경계를 남긴다.
-  const footprint = Math.max(0.12, tileSize * 0.84)
-  // 바닥 타일은 높이 0.08이 y=0 중심이라 윗면이 0.04다.
-  const baseY = 0.04
+function LayoutObjectBox({
+  color,
+  heightM,
+  footprint,
+}: {
+  color: string
+  heightM: number
+  footprint: number
+}) {
   // `args`로 넘기면 렌더마다 새 지오메트리가 만들어진다 — 박스와 모서리 선이 하나를 같이 쓴다.
-  const boxGeometry = useMemo(() => new THREE.BoxGeometry(footprint, heightM, footprint), [footprint, heightM])
+  const boxGeometry = useMemo(
+    () => new THREE.BoxGeometry(footprint, heightM, footprint),
+    [footprint, heightM],
+  )
   useEffect(() => () => boxGeometry.dispose(), [boxGeometry])
+  const centerY = LAYOUT_OBJECT_BASE_Y + heightM / 2
 
   return (
-    <group
-      position={[placement.tileX * tileSize, 0, placement.tileZ * tileSize]}
-      rotation={[0, placement.rotation, 0]}
-    >
+    <>
       {/*
         ⚠️ 조명을 받는 재질(`meshStandardMaterial`)을 쓰지 않는다. 이 씬은 노출이 높고
         ACES 톤매핑이 걸려 있어 팔레트 색이 통째로 밝은 쪽으로 밀린다 —
@@ -647,10 +654,10 @@ function LayoutObjectMesh({ object, tileSize }: { object: SceneObject; tileSize:
         `toneMapped={false}` + basic 재질이면 화면 색이 팔레트 값 그대로다.
         형태감은 아래 모서리 선이 준다(음영 대신 윤곽) — 물리 모델인 랙과 시각적으로도 갈린다.
       */}
-      <mesh position={[0, baseY + heightM / 2, 0]} geometry={boxGeometry} castShadow>
-        <meshBasicMaterial color={object.color} toneMapped={false} />
+      <mesh position={[0, centerY, 0]} geometry={boxGeometry} castShadow>
+        <meshBasicMaterial color={color} toneMapped={false} />
       </mesh>
-      <lineSegments position={[0, baseY + heightM / 2, 0]} raycast={() => undefined}>
+      <lineSegments position={[0, centerY, 0]} raycast={() => undefined}>
         <edgesGeometry args={[boxGeometry]} />
         <lineBasicMaterial color="#dceaf6" transparent opacity={0.5} toneMapped={false} />
       </lineSegments>
@@ -658,32 +665,107 @@ function LayoutObjectMesh({ object, tileSize }: { object: SceneObject; tileSize:
         정면(FRONT) 표시 — FMS 2D 에디터의 파란 막대와 같은 뜻이다(§11-30 2).
         로컬 +Z가 정면이고, 그 면이 `dir`이 가리키는 방위를 향하도록 회전돼 있다.
       */}
-      <mesh position={[0, baseY + heightM * 0.5, footprint / 2 + 0.006]}>
+      <mesh position={[0, centerY, footprint / 2 + 0.006]}>
         <boxGeometry args={[footprint * 0.62, Math.min(0.06, heightM * 0.16), 0.012]} />
         <meshBasicMaterial color="#e8f6ff" toneMapped={false} />
       </mesh>
+    </>
+  )
+}
+
+/**
+ * 모델이 있는 종류의 표현 — **팔레트 색 받침대 + 실치수 GLB**.
+ *
+ * ⚠️ **타일 크기에 맞춰 늘리지 않는다.** 랙 GLB 와 같은 규약이다(`Rack` 주석) — 항온항습기의
+ * 물리 치수(1200×890mm)는 전산실 타일이 600mm든 1000mm든 그대로다. 1타일 규약(§11-31 ②)은
+ * "몇 칸을 점유하는가"에 대한 것이지 형상 크기가 아니다.
+ *
+ * ⚠️ **받침대는 폭이 타일 한 칸이라, 타일보다 넓은 모델(항온항습기·가스 소화 설비) 아래서는
+ * 가려서 안 보인다.** 그래도 넣는 것은 타일보다 좁은 모델에서 팔레트 색이 드러나기 때문이고,
+ * 어느 경우든 **색의 최종 보증은 이름표 칩**이다(아래 `Html`의 테두리·점이 같은 색을 쓴다).
+ * 받침대를 모델 폭에 맞춰 늘리면 FMS 가 배정한 칸이 어디인지가 흐려진다 — 그건 잃으면 안 된다.
+ */
+function LayoutObjectModel({
+  model,
+  color,
+  footprint,
+}: {
+  model: string
+  color: string
+  footprint: number
+}) {
+  const url = assetUrl(`models/objects/${model}.glb?v=${MODEL_VERSION}`)
+  const { scene } = useGLTF(url, GLTF_USE_DRACO, GLTF_USE_MESHOPT)
+  const instance = useMemo(() => cloneModel(scene), [scene])
+
+  return (
+    <>
+      <mesh position={[0, LAYOUT_OBJECT_BASE_Y + LAYOUT_PLATE_H / 2, 0]} raycast={() => undefined}>
+        <boxGeometry args={[footprint, LAYOUT_PLATE_H, footprint]} />
+        <meshBasicMaterial color={color} toneMapped={false} />
+      </mesh>
+      {/*
+        정면 막대를 모델에는 붙이지 않는다 — 모델 자체가 정면을 말한다(항온항습기 LCD,
+        UPS 도어 손잡이, 가스 소화 설비 압력계). 흰 막대를 덧대면 실사 형상 위에 겉돈다.
+      */}
+      <primitive object={instance} position={[0, LAYOUT_OBJECT_BASE_Y + LAYOUT_PLATE_H, 0]} />
+    </>
+  )
+}
+
+/**
+ * 배치 오브젝트 1건.
+ *
+ * 표현이 **두 갈래**다. `LAYOUT_OBJECT_MODELS` 에 모델이 있으면 실치수 GLB 를,
+ * 없으면 지금까지처럼 색 박스를 그린다. E18 ④ 는 "3D 모델은 확보하지 않는다"였는데,
+ * 2026-09-03 사용자가 레퍼런스와 실측 사양을 제시하며 뒤집었다.
+ * 근거·규약은 `docs/layout-object-modeling-plan.md`.
+ *
+ * ⚠️ 모델 로딩은 **자기 `Suspense` 안에서** 한다. 씬 전체를 감싼 바깥 `Suspense`에 맡기면
+ * 오브젝트 GLB 하나 받는 동안 **ZONE 화면 전체가 로딩으로 되돌아간다.** 여기서 잡으면
+ * 그 오브젝트만 색 박스로 있다가 모델로 바뀐다.
+ *
+ * 클릭 핸들러를 달지 않는 것은 의도다 — 이 오브젝트들에는 붙일 상세 데이터가 없고,
+ * 핸들러가 있으면 r3f가 `onPointerMissed`(전체 보기 복귀)를 막는다.
+ */
+function LayoutObjectMesh({ object, tileSize }: { object: SceneObject; tileSize: number }) {
+  const { placement, heightM } = object
+  // 1타일보다 조금 작게 — 옆 칸과 붙어 한 덩어리로 보이지 않게 칸 경계를 남긴다.
+  const footprint = Math.max(0.12, tileSize * 0.84)
+  const model = LAYOUT_OBJECT_MODELS[object.type]
+  const box = <LayoutObjectBox color={object.color} heightM={heightM} footprint={footprint} />
+
+  return (
+    <group
+      position={[placement.tileX * tileSize, 0, placement.tileZ * tileSize]}
+      rotation={[0, placement.rotation, 0]}
+    >
+      {model ? (
+        <Suspense fallback={box}>
+          <LayoutObjectModel model={model} color={object.color} footprint={footprint} />
+        </Suspense>
+      ) : box}
       {/*
         ⚠️ 이 레이블에는 `occlude`를 걸지 않는다 — **가려서 숨기는 것보다 안 보이는 쪽이 더 나쁘다.**
 
-        3D 모델이 없는 이 오브젝트들은 "색 박스 + 이름표"가 정보 전부라, 레이블이 숨으면
-        기능의 절반이 죽는다. drei의 `occlude`는 씬 전체를 레이캐스트해 시선이 막히면
-        `display:none`을 걸어버리는데, 이 오브젝트들은 박스가 0.2~0.35m로 낮아서
-        **옆 칸의 랙(히트박스 0.72×2.12×1.1)·방화문(2.1m)·항온항습기(2.0m)가 그대로 시선을 막는다.**
-        레이블 높이에 하한(0.62m)을 둬 봤지만 부족했다 — 실측(ZONE 10, 진입 기본 카메라
-        (3.30, 4.05, 7.05))에서 화재감지·누수감지·온습도·CCTV·가스감지·지진감지 6종이
-        **사용자가 ZONE에 처음 들어갔을 때 보는 바로 그 화면에서** 통째로 사라졌다.
+        drei의 `occlude`는 씬 전체를 레이캐스트해 시선이 막히면 `display:none`을 걸어버리는데,
+        낮은 오브젝트(누수 0.2m·온습도 0.3m)는 옆 칸의 랙(히트박스 0.72×2.12×1.1)·방화문(2.1m)·
+        항온항습기(1.98m)가 그대로 시선을 막는다. 레이블 높이에 하한(0.62m)을 둬 봤지만 부족했다 —
+        실측(ZONE 10, 진입 기본 카메라 (3.30, 4.05, 7.05))에서 화재감지·누수감지·온습도·CCTV·
+        가스감지·지진감지 6종이 **사용자가 ZONE에 처음 들어갔을 때 보는 바로 그 화면에서** 사라졌다.
 
         벽·천장이 없고 부감이 기본인 씬이라 "뒤에 가려진 것이 비쳐 보이는" 손해는 작다.
-        비용도 늘지 않는다 — DOM 수는 그대로고(`occlude`는 숨길 때도 포털·프레임 계산을
-        그대로 하고 `display`만 껐다), 오히려 레이블 1개당 매 프레임 씬 전체 교차 검사가
-        사라진다(랙 36대 ZONE 실측 0.2ms/레이블).
+        비용도 늘지 않는다 — DOM 수는 그대로고, 오히려 레이블 1개당 매 프레임 씬 전체 교차
+        검사가 사라진다(랙 36대 ZONE 실측 0.2ms/레이블).
 
-        높이 하한(0.62m)과 `zIndexRange={[1, 0]}`은 유지한다. 하한은 이제 가림 회피용이 아니라
-        낮은 박스 위에서 이름표가 박스·모서리 선과 겹쳐 읽히지 않게 띄우는 값이고,
-        z 범위는 랙 레이블·경보 뱃지가 위에 오도록 한다(drei는 `occlude`가 있을 때도
-        이 값에서 [1, 0]을 썼으므로 겹침 순서는 바뀌지 않는다).
+        높이 하한(0.62m)과 `zIndexRange={[1, 0]}`은 유지한다. 하한은 낮은 오브젝트 위에서
+        이름표가 형상과 겹쳐 읽히지 않게 띄우는 값이고, z 범위는 랙 레이블·경보 뱃지가 위에
+        오도록 한다.
+
+        **이름표 칩(테두리·점)이 팔레트 색의 최종 보증이다** — 모델을 쓰는 오브젝트는 받침대가
+        모델에 가려질 수 있어서, 2D 에디터와의 색 대응이 여기에 남는다.
       */}
-      <Html position={[0, baseY + Math.max(heightM + 0.14, 0.62), 0]} center distanceFactor={8} zIndexRange={[1, 0]}>
+      <Html position={[0, LAYOUT_OBJECT_BASE_Y + Math.max(heightM + 0.14, 0.62), 0]} center distanceFactor={8} zIndexRange={[1, 0]}>
         <div className="layout-object-label" style={{ borderColor: object.color }}>
           <i style={{ background: object.color }} />
           {object.label}

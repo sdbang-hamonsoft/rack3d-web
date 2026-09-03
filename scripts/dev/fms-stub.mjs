@@ -205,6 +205,11 @@ const layoutObjects = [
   layoutObject({ id: 9, type: 'SENSOR', x: 5, z: 6, dir: 'NORTH', label: '온습도 센서' }),
   layoutObject({ id: 10, type: 'DOOR', x: 0, z: 7, dir: 'EAST', label: '방화문' }),
   layoutObject({ id: 11, type: 'UNKNOWN_KIND', x: 7, z: 6, dir: 'NORTH', label: '' }),   // 미지원 type → 회색 박스 + 'UNKNOWN_KIND'
+  layoutObject({ id: 12, type: 'GAS', x: 9, z: 6, dir: 'NORTH', label: '가스 소화 설비' }),
+  // ⚠️ `BATTERY` 는 **아직 FMS 팔레트에 없다**(신설 요청 중). 여기 넣어 두는 것은
+  // "FMS 가 내보내기 시작하면 rack3d 를 안 고쳐도 모델이 붙는다"를 실제로 확인하기 위해서다.
+  // FMS 가 이 type 을 서빙하기 전까지 실환경에서는 나오지 않는다.
+  layoutObject({ id: 13, type: 'BATTERY', x: 11, z: 6, dir: 'NORTH', label: '배터리 랙' }),
 ]
 
 /**

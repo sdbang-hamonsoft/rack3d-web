@@ -276,6 +276,40 @@ export const LAYOUT_OBJECT_HEIGHTS_M: Record<string, number> = {
   SEISMIC: 0.3,
 }
 
+/**
+ * 3D 모델을 가진 종류 → `public/models/objects/<이름>.glb`.
+ *
+ * 여기 **없는 종류는 지금까지처럼 색 박스**로 그린다(`objectColor`/{@link LAYOUT_OBJECT_HEIGHTS_M}).
+ * 모델을 한 번에 다 갖추기 전에도 씬이 온전하려면 두 표현이 공존해야 한다.
+ *
+ * ⚠️ `BATTERY` 는 **FMS 팔레트에 아직 없다**(신설 요청 중). 여기 미리 넣어 두는 것은 의도다 —
+ * `LayoutObject.type` 이 `string` 이라, FMS 가 `BATTERY` 를 내보내기 시작하면 rack3d 를
+ * 고치지 않아도 모델이 붙는다. 그때까지 이 줄은 아무 일도 하지 않는다.
+ */
+export const LAYOUT_OBJECT_MODELS: Record<string, string> = {
+  CRAC: 'precision-ac',
+  UPS: 'ups',
+  GAS: 'gas-suppression',
+  BATTERY: 'battery-rack',
+}
+
+/**
+ * 모델의 실제 높이(m) — **GLB 실측이다**(`node scripts/dev/glb-stats.mjs public/models/objects/*.glb`).
+ *
+ * {@link LAYOUT_OBJECT_HEIGHTS_M} 의 임의값을 대체한다. 그 값들은 "색 박스로 대강 구분"을
+ * 전제로 정한 것이라 실물 모델과 맞지 않는다 — 특히 `GAS` 는 0.3m 였는데 실제 용기 뱅크는
+ * 1.42m 다. 0.3m 로 두면 실린더가 납작하게 눌린 채 그려진다.
+ *
+ * 이 값은 **형상을 스케일하는 데 쓰지 않는다.** 모델은 실치수 그대로 그리고, 이 수치는
+ * 이름표를 어느 높이에 띄울지 정하는 데만 쓴다.
+ */
+export const LAYOUT_OBJECT_MODEL_HEIGHTS_M: Record<string, number> = {
+  CRAC: 1.98,
+  UPS: 1.80,
+  GAS: 1.42,
+  BATTERY: 1.55,
+}
+
 /** 모르는 종류의 박스 높이(m). */
 export const UNKNOWN_OBJECT_HEIGHT_M = 0.6
 
@@ -347,7 +381,12 @@ function toPlacement(object: LayoutObject, grid: SceneGrid): ScenePlacement | nu
  * 화면에 숫자로 새지 않는다(랙 크기 표시는 언제나 FMS 원값 `rackUnits`, 미설정이면 `—`).
  */
 function objectHeightM(object: LayoutObject): number {
-  if (object.type !== 'RACK') return LAYOUT_OBJECT_HEIGHTS_M[object.type] ?? UNKNOWN_OBJECT_HEIGHT_M
+  if (object.type !== 'RACK') {
+    // 모델이 있으면 실측 높이가 우선이다 — 임의값(색 박스 시절)은 모델과 맞지 않는다.
+    return LAYOUT_OBJECT_MODEL_HEIGHTS_M[object.type]
+      ?? LAYOUT_OBJECT_HEIGHTS_M[object.type]
+      ?? UNKNOWN_OBJECT_HEIGHT_M
+  }
   const units = object.rack?.rackUnits
   return typeof units === 'number' && units > 0
     ? RACK_BASE_HEIGHT_M + units * RACK_UNIT_HEIGHT_M

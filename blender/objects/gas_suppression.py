@@ -48,8 +48,16 @@ parts = []
 
 # --- 바닥 스키드 + 후면 지지 프레임 ---
 parts.append(box("skid", (WIDTH + 0.06, DEPTH, SKID_H), (0, 0, SKID_H / 2), dark))
-parts.append(box("back_frame", (WIDTH + 0.06, 0.035, CYL_H * 0.95),
-                 (0, DEPTH / 2 - 0.02, SKID_H + CYL_H * 0.95 / 2), dark))
+# 후면 지지대는 **통짜 패널이 아니라 기둥 2 + 상단 레일**이다.
+# 1차본은 1.26 x 1.09m 짜리 판이었는데, 씬에서 오브젝트가 뒤를 보고 있으면(`dir`)
+# 그 판이 카메라를 정면으로 막아 **용기가 하나도 안 보였다.** 사용자가 자유롭게 도는
+# 씬이라 뒤에서 봐도 무엇인지 읽혀야 한다.
+post_h = CYL_H * 0.95
+for i, sx in enumerate((-1, 1)):
+    parts.append(box(f"back_post_{i}", (0.045, 0.035, post_h),
+                     (sx * (WIDTH / 2 - 0.02), DEPTH / 2 - 0.02, SKID_H + post_h / 2), dark))
+parts.append(box("back_rail", (WIDTH + 0.06, 0.035, 0.055),
+                 (0, DEPTH / 2 - 0.02, SKID_H + post_h - 0.028), dark))
 
 x0 = -WIDTH / 2 + CYL_R
 
