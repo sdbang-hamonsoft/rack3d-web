@@ -4,6 +4,12 @@
 
 ## 할 일
 
+- [ ] 배포 절차가 저장소에 없다 — buru-ext 의 `~/cicd/rack3d/` 에만 있다
+  - 실제 파이프라인: `build.sh`+`build.yml`(GitHub main pull → `main-<sha>` 태그 → docker build → `10.1.20.21:5000` push) · `deploy.sh`+`deploy.yml`(`kubectl -n rack3d set image` → `rollout status`)
+  - 2026-09-03 배포 때 이 절차를 찾느라 netis-fms 쪽 주석(`deploy/cicd/build.sh`)을 거슬러 올라가야 했다. **다음 사람도 같은 시간을 쓴다**
+  - `build.sh` 가 GitHub ID/토큰을 대화형으로 요구한다 — 이번에는 저장소가 익명으로 읽히는 것을 확인하고 같은 `build.yml` 을 공개 URL 로 호출해 우회했다. 절차가 갈라진 채로 두면 다음에 또 갈라진다
+  - 최소한 `deploy/README.md` 에 호스트·경로·명령·되돌리기를 적어 둘 것. 스크립트 사본을 저장소에 둘지는 별도 판단(서버 IP·토큰 취급이 걸린다)
+
 - [ ] 🛠 배치 오브젝트 8종 실사풍 3D 모델 — 색 박스를 대체한다 (E18 ④ 결정 뒤집기)
   - 대상: 항온항습기(CRAC)·UPS·배터리 랙·온습도(SENSOR)·누수(WATER)·가스 소화(GAS)·화재(FIRE)·도어(DOOR)
   - 기획·근거·규약: `docs/layout-object-modeling-plan.md`. 레퍼런스: `artifacts/reference/fms-object-3d-guide.jpg`
@@ -13,7 +19,8 @@
   - ✅ 배치 미리보기로 랙과 나란히 세워 크기 검증(`blender/objects/_scene_preview.py`)
   - ⬜ 나머지 4종(온습도·누수·화재·도어) — **크기 결정이 먼저다.** 실물 3~15cm 라 실측대로면 화면에서 점이다
   - ✅ 씬 통합 완료 — `LayoutObjectMesh` 가 모델 있으면 GLB, 없으면 색 박스. 오브젝트별 `Suspense` 로 로딩 중 색 박스 유지
-  - ⬜ 푸시·배포 미완 — 로컬 커밋만 있다
+  - ✅ 배포 완료 `main-42782d6` (2026-09-03) — 라이브 GLB 4개 sha256 대조·번들 갱신 확인 (§11-39)
+    화면에 실제로 나오는 것은 `CRAC`·`UPS` 2종. 나머지 2종은 FMS type 신설 대기
   - ⚠️ 항온항습기·가스 소화 설비가 가로 2칸을 쓴다. FMS 는 1칸만 관리해서 옆 칸과 겹칠 수 있다(사용자 확인 중)
   - ⬜ 씬 통합(`LayoutObjectMesh`) + 팔레트 색 받침대 + `MODEL_VERSION` 증가 + 이름표 가림 회귀 확인
   - ✅ 벽걸이·천장형 3종(온습도·누수·화재)은 **기둥 없이 띄운다**(1.2~1.5m). FMS 에 없는 설치물을 지어내지 않는다
