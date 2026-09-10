@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Rack3D 모델 검수</title>
+<style>
+*{box-sizing:border-box}body{height:100dvh;display:flex;flex-direction:column;margin:0;background:#101820;color:#e4edf3;font:15px system-ui}header{padding:18px 22px;border-bottom:1px solid #33414b}h1{font-size:20px;margin:0 0 8px}p{margin:6px 0;color:#b8c5ce}nav{display:flex;gap:10px;flex-wrap:wrap;padding:12px 22px}select,button,a{font:inherit;color:#e4edf3;background:#22313c;border:1px solid #4d6575;border-radius:6px;padding:9px;text-decoration:none}main{flex:1;min-height:250px;overflow:hidden}canvas{display:block;touch-action:none}#info{padding:8px 22px}#status{color:#83d5eb}button{cursor:pointer}
+</style></head><body>
+<header><h1>Rack3D · 표준 모델 검수</h1><p>드래그: 회전 · 두 손가락/휠: 확대 · 우클릭: 이동</p></header>
+<nav><select id="model" aria-label="모델"></select><button data-view="front">앞</button><button data-view="rear">뒤</button><button data-view="iso">전체</button><a href="../../">전산실 테스트</a></nav>
+<div id="info"><span id="status">불러오는 중…</span><p>설비 치수는 참고 도면 기준입니다. 센서의 설치 높이·문 개폐·LED·계기 값은 실시간 상태가 아닙니다.</p></div><main></main>
+<script type="module" src="./model-catalog.mjs"></script></body></html>

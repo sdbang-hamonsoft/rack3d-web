@@ -7,14 +7,46 @@ import type {
   ZoneLayout,
 } from './api/types'
 
-/** 번들에 들어 있는 3D 장비 모델 3종. **형상 근사용이며 표시 문구의 출처가 아니다.** */
+/** Exact vendor assets plus neutral standard rack-device families. */
+export type StandardUnit = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10
 export type ServerModel = 'dell-poweredge-r760' | 'hpe-proliant-dl360-gen11' | 'cisco-ucs-c240-m7'
+  | `standard-server-${StandardUnit}u` | `standard-network-${StandardUnit}u`
 
-/** 각 GLB의 고유 높이(U). 실측(`public/models/*.glb` POSITION accessor min/max). */
 export const SERVER_MODEL_UNITS: Record<ServerModel, number> = {
   'dell-poweredge-r760': 2,
   'hpe-proliant-dl360-gen11': 1,
   'cisco-ucs-c240-m7': 2,
+  'standard-server-1u': 1,
+  'standard-server-2u': 2,
+  'standard-server-3u': 3,
+  'standard-server-4u': 4,
+  'standard-server-5u': 5,
+  'standard-server-6u': 6,
+  'standard-server-7u': 7,
+  'standard-server-8u': 8,
+  'standard-server-9u': 9,
+  'standard-server-10u': 10,
+  'standard-network-1u': 1,
+  'standard-network-2u': 2,
+  'standard-network-3u': 3,
+  'standard-network-4u': 4,
+  'standard-network-5u': 5,
+  'standard-network-6u': 6,
+  'standard-network-7u': 7,
+  'standard-network-8u': 8,
+  'standard-network-9u': 9,
+  'standard-network-10u': 10,
+}
+
+export function isStandardModel(model: ServerModel): boolean {
+  return model.startsWith('standard-')
+}
+
+/** Network sheet depth groups; server depth is always 800mm. */
+export function standardModelDepth(model: ServerModel): number {
+  if (!model.startsWith('standard-network-')) return 0.8
+  const units = SERVER_MODEL_UNITS[model]
+  return units === 1 ? 0.35 : units === 2 ? 0.45 : units <= 4 ? 0.55 : units <= 7 ? 0.6 : 0.65
 }
 
 /**
@@ -86,30 +118,27 @@ export function assetElementId(assetId: number): string {
   return `fms-asset-${assetId}`
 }
 
-/** 제조사 문자열에서 우리 GLB 3종을 찾는다. 못 찾으면 null(지어내지 않는다). */
-function modelForManufacturer(manufacturer: string | null): ServerModel | null {
-  const name = (manufacturer ?? '').toLowerCase()
-  if (!name) return null
-  if (name.includes('dell')) return 'dell-poweredge-r760'
-  if (name.includes('hpe') || name.includes('hewlett')) return 'hpe-proliant-dl360-gen11'
-  if (name.includes('cisco')) return 'cisco-ucs-c240-m7'
-  return null
-}
+/** Only explicit manufacturer/model aliases qualify; substrings never do. */
+const normalizeModel = (value: string | null) => (value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+const exactModels: { manufacturers: string[]; models: string[]; model: ServerModel }[] = [
+  { manufacturers: ['dell', 'dellinc', 'dellemc'], models: ['poweredger760', 'r760'], model: 'dell-poweredge-r760' },
+  { manufacturers: ['hp', 'hpe', 'hewlettpackard', 'hewlettpackardenterprise'], models: ['proliantdl360gen11', 'dl360gen11'], model: 'hpe-proliant-dl360-gen11' },
+  { manufacturers: ['cisco', 'ciscosystems', 'ciscosystemsinc'], models: ['ucsc240m7', 'c240m7'], model: 'cisco-ucs-c240-m7' },
+]
 
-/**
- * 자산 → 3D 형상 GLB 선택.
- *
- * 우리 GLB는 dell(2U)·hpe(1U)·cisco(2U) 3종뿐인데 FMS 자산은 제조사가 임의(Synology 등)이거나
- * null이다. **형상은 근사치여도 되지만 글자는 실제 값이어야 한다**는 원칙에 따라:
- * 1. 제조사가 3사 중 하나면 그 브랜드 GLB (관제자가 랙을 보고 브랜드를 알아보는 값이 크다)
- * 2. 아니면 U 높이로 고른다 — 1U는 hpe(1U 모델), 2U 이상은 dell(2U 모델)
- *
- * 어느 경로든 {@link ServerData.units}만큼 Y축을 늘려 **실제 점유 높이는 정확히 맞춘다**
- * (형상은 근사여도 "몇 U를 먹는가"는 실데이터라 틀리면 안 된다).
+/** Exact identity AND U match first; otherwise category-specific neutral geometry.
+ * >10U uses the 10U chassis scaled to the actual occupied height, never a missing URL.
+ * Unknown categories use neutral server geometry, without changing the FMS category.
  */
-export function pickServerModel(manufacturer: string | null, units: number): ServerModel {
-  return modelForManufacturer(manufacturer)
-    ?? (units <= 1 ? 'hpe-proliant-dl360-gen11' : 'dell-poweredge-r760')
+export function pickServerModel(manufacturer: string | null, units: number, modelName: string | null = null, category: string | null = null): ServerModel {
+  const maker = normalizeModel(manufacturer)
+  const name = normalizeModel(modelName)
+  const network = category?.trim().toUpperCase() === 'NETWORK'
+  const exact = !network && exactModels.find((entry) => entry.manufacturers.includes(maker)
+    && entry.models.includes(name) && SERVER_MODEL_UNITS[entry.model] === units)
+  if (exact) return exact.model
+  const u = Math.max(1, Math.min(10, Math.floor(Number.isFinite(units) ? units : 1))) as StandardUnit
+  return network ? `standard-network-${u}u` : `standard-server-${u}u`
 }
 
 /**
@@ -139,7 +168,7 @@ export function toServerData(asset: RackAsset): ServerData | null {
     units,
     hasFront: asset.hasFront,
     hasRear: asset.hasRear,
-    model: pickServerModel(asset.manufacturer, units),
+    model: pickServerModel(asset.manufacturer, units, asset.modelName, asset.category),
   }
 }
 
@@ -295,6 +324,9 @@ export const LAYOUT_OBJECT_HEIGHTS_M: Record<string, number> = {
 export const LAYOUT_OBJECT_MODELS: Record<string, string> = {
   CRAC: 'precision-ac',
   UPS: 'ups',
+  SENSOR: 'temperature-humidity-sensor',
+  WATER: 'water-leak-sensor',
+  DOOR: 'door',
   BATTERY: 'battery-rack',
   SUPPRESSION: 'gas-suppression',
 }
@@ -312,8 +344,11 @@ export const LAYOUT_OBJECT_MODELS: Record<string, string> = {
 export const LAYOUT_OBJECT_MODEL_HEIGHTS_M: Record<string, number> = {
   CRAC: 1.98,
   UPS: 2.00,
-  BATTERY: 1.55,
-  SUPPRESSION: 1.42,
+  BATTERY: 2.00,
+  SUPPRESSION: 2.40,
+  SENSOR: 0.12,
+  WATER: 0.023,
+  DOOR: 2.10,
 }
 
 /** 모르는 종류의 박스 높이(m). */

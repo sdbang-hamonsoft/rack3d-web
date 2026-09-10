@@ -133,3 +133,16 @@ Chrome DevTools Protocol을 직접 쓰는 최소 클라이언트(의존성 0).
 
 **임시 프로필은 쓰고 나면 지운다.** 실 FMS 로 로그인해 확인한 경우 그 디렉터리에 운영 세션
 쿠키(`NETIS_RT`)가 남는다.
+
+
+## 표준 모델 검수 (2026-09-11)
+
+개발 서버의 `/rack3d/scripts/dev/model-catalog.html`에서 UPS와 설비 5종,
+표준서버/네트워크 각 1~10U를 선택해 앞·뒤·전체로 돌려볼 수 있다. FMS 인증이나
+스텁 없이도 GLB 검수는 가능하다. 앱 통합 검수는 기존처럼 FMS 스텁을 띄운다.
+이 검수 페이지는 개발 도구이며 프로덕션 빌드/배포에는 포함되지 않는다.
+
+Node 24 이상으로 `node --experimental-strip-types --test scripts/dev/model-*.test.mjs` 실행.
+외부 테스트 프레임워크 없이 `node:test`로 모델 매칭과 실제 GLB 규격을 검사한다.
+`_preview.py`로 만든 PNG는 `model-contact-sheets.py`(Pillow 필요)로 비교판을 만든다.
+비교판은 개별 모델에 맞춰 확대하므로 모델끼리 동일 축척이 아니다.

@@ -23,6 +23,7 @@ elev_deg = float(argv[3]) if len(argv) > 3 else 22.0
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=glb_path)
+bpy.context.view_layer.update()
 
 # --- 대상 크기 파악 ---
 lo = Vector((1e9, 1e9, 1e9))
@@ -48,7 +49,8 @@ bpy.context.active_object.data.materials.append(floor_mat)
 # --- 조명: 키 + 필 + 림 ---
 def add_light(name, kind, energy, location, size=2.0):
     data = bpy.data.lights.new(name, kind)
-    data.energy = energy
+    # Keep irradiance stable for 40mm sensors and 2m cabinets alike.
+    data.energy = energy * (span / 2.0) ** 2
     if kind == "AREA":
         data.size = size
     obj = bpy.data.objects.new(name, data)

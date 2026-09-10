@@ -6,6 +6,8 @@ import type { Group } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import {
   LAYOUT_OBJECT_MODELS,
+  isStandardModel,
+  standardModelDepth,
   RACK_BASE_HEIGHT_M,
   RACK_UNIT_HEIGHT_M,
   SERVER_MODEL_UNITS,
@@ -111,7 +113,7 @@ const RACK_INNER_BOTTOM = RACK_BASE_HEIGHT_M
  * 랙만 안 바뀐다"로 나타나고 원인 추적이 오래 걸린다. **URL은 `useGLTF`와
  * `useGLTF.preload` 양쪽이 정확히 같아야** 프리로드가 효과를 낸다(다르면 두 번 받는다).
  */
-const MODEL_VERSION = '13'
+const MODEL_VERSION = '14'
 const SPLASH_DURATION = 3600
 const RACK_FOCUS_HEIGHT = 1.06
 const RACK_FOCUS_DISTANCE = 1.15
@@ -218,10 +220,16 @@ function severityLabel(severity: RackSeverity): string {
  * FMS가 준 `modelName`/`manufacturer`가 화면에 나가는 값이고, 이 라벨은
  * "3D 형상은 무엇으로 근사했는가"를 밝힐 때만 쓴다(형상 근사 고지).
  */
-const serverModelLabels: Record<ServerModel, string> = {
+const vendorModelLabels: Partial<Record<ServerModel, string>> = {
   'dell-poweredge-r760': 'Dell PowerEdge R760',
   'hpe-proliant-dl360-gen11': 'HPE ProLiant DL360 Gen11',
   'cisco-ucs-c240-m7': 'Cisco UCS C240 M7',
+}
+
+function serverModelLabel(model: ServerModel): string {
+  if (!isStandardModel(model)) return vendorModelLabels[model] ?? model
+  const kind = model.startsWith('standard-network-') ? '표준 네트워크' : '표준 서버'
+  return `${kind} ${SERVER_MODEL_UNITS[model]}U`
 }
 
 /**
@@ -236,7 +244,7 @@ function formatUnitRange(server: ServerData) {
 /**
  * 3D 장비 앞뒤면 그림의 **출처 표기**(C7).
  *
- * 형상은 GLB 3종 근사라 앞뒤면에 **다른 장비의 사진이 구워져 있다.** netis-fms에 이 자산의
+ * 기존 벤더 GLB에는 기본 사진이 있고 표준 GLB에는 중립 형상만 있다. netis-fms에 이 자산의
  * 실물 사진이 있으면 그것으로 덮지만(E17), 없으면 구워진 그림이 그대로 남는다 —
  * 그때 아무 말도 하지 않으면 관제자가 그 그림을 이 장비의 실물로 읽는다.
  *
@@ -252,6 +260,7 @@ function serverPhotoNote(server: ServerData): string {
   if (server.hasFront && server.hasRear) return ' 앞뒤면 실물 사진이 netis-fms에 등록되어 있습니다 — 3D에는 가까이서 볼 때 반영되고, 반영 전 그림은 이 자산의 사진이 아닙니다.'
   if (server.hasFront) return ' 앞면 실물 사진만 netis-fms에 등록되어 있습니다 — 3D 앞면에 가까이서 볼 때 반영되고, 반영 전 앞면과 뒷면 그림은 이 자산의 사진이 아닙니다.'
   if (server.hasRear) return ' 뒷면 실물 사진만 netis-fms에 등록되어 있습니다 — 3D 뒷면에 가까이서 볼 때 반영되고, 반영 전 뒷면과 앞면 그림은 이 자산의 사진이 아닙니다.'
+  if (isStandardModel(server.model)) return ' 실물 사진이 없어 제조사 표시 없는 표준 3D 형상을 사용합니다.'
   return ' 앞뒤면 그림은 형상 모델에 구워진 기본 이미지입니다 — netis-fms에 이 자산의 실물 사진이 없습니다.'
 }
 
@@ -357,7 +366,9 @@ function cloneModel(scene: Group) {
 type PhotoPlane = {
   mesh: THREE.Mesh
   material: THREE.MeshStandardMaterial
-  /** GLB에 구워진 기본 사진. 자산 사진을 못 받으면 **여기로 되돌린다**(C6 — 남의 사진 금지). */
+  /** 표준 형상 위에 올리는 사진 면은 실사진을 받기 전까지 숨긴다. */
+  procedural?: boolean
+  /** 기존 벤더 GLB에 구워진 기본 사진. 표준 모델에는 없다. */
   bakedMap: THREE.Texture | null
   bakedEmissiveMap: THREE.Texture | null
   /** 지오메트리 실측 폭·높이(m). 종횡비 보정의 기준값이다. */
@@ -398,6 +409,27 @@ function findPhotoPlanes(model: Group): PhotoPlanes {
   return planes
 }
 
+/** Standard GLBs keep their modeled faces until an actual asset photo arrives.
+ * Photo surfaces sit in front of the face details and mounting rails, and are owned
+ * by this instance. Rear orientation and UVs match the existing glTF photo convention.
+ */
+function makeStandardPhotoPlanes(serverModel: ServerModel): PhotoPlanes {
+  const height = SERVER_MODEL_UNITS[serverModel] * UNIT_HEIGHT - 0.001
+  const depth = standardModelDepth(serverModel)
+  const make = (front: boolean): PhotoPlane => {
+    const geometry = new THREE.PlaneGeometry(0.483, height)
+    const uv = geometry.getAttribute('uv')
+    for (let i = 0; i < uv.count; i++) uv.setY(i, 1 - uv.getY(i))
+    const material = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.6 })
+    const mesh = new THREE.Mesh(geometry, material)
+    mesh.position.z = front ? 0.419 : 0.410 - depth - 0.004
+    if (!front) mesh.rotation.y = Math.PI
+    mesh.visible = false
+    return { mesh, material, width: 0.483, height, bakedMap: null, bakedEmissiveMap: null, procedural: true }
+  }
+  return { front: make(true), rear: make(false) }
+}
+
 /**
  * 종횡비 보정 상한·하한.
  *
@@ -427,6 +459,13 @@ function applyPhotoTexture(plane: PhotoPlane, texture: THREE.Texture, aspect: nu
   if (plane.bakedEmissiveMap) plane.material.emissiveMap = texture
   plane.material.needsUpdate = true
 
+  if (plane.procedural) {
+    // Contain the entire photograph within the 19-inch face; never cover adjacent rails.
+    const ratio = plane.height * heightScale * aspect / plane.width
+    plane.mesh.scale.set(Math.min(1, ratio), Math.min(1, 1 / ratio), 1)
+    plane.mesh.visible = true
+    return
+  }
   const worldHeight = plane.height * heightScale
   const scaleX = plane.width > 0 && worldHeight > 0 ? (worldHeight * aspect) / plane.width : 1
   plane.mesh.scale.x = scaleX >= PHOTO_ASPECT_SCALE_MIN && scaleX <= PHOTO_ASPECT_SCALE_MAX ? scaleX : 1
@@ -437,7 +476,8 @@ function restorePhotoTexture(plane: PhotoPlane) {
   plane.material.map = plane.bakedMap
   plane.material.emissiveMap = plane.bakedEmissiveMap
   plane.material.needsUpdate = true
-  plane.mesh.scale.x = 1
+  plane.mesh.scale.set(1, 1, 1)
+  if (plane.procedural) plane.mesh.visible = false
 }
 
 /**
@@ -487,8 +527,8 @@ function useAssetPhoto(
 /**
  * 랙 안의 장비 1대(netis-fms u맵 자산).
  *
- * **형상은 근사, 위치·높이는 실측이다.** GLB는 3종(dell 2U·hpe 1U·cisco 2U)뿐이므로
- * 제조사/U 높이로 하나를 고른 뒤(`pickServerModel`) **Y축을 실제 U 높이에 맞춰 늘린다** —
+ * **형상은 근사, 위치·높이는 실측이다.** 제조사·모델·U가 일치하면 벤더 모델을,
+ * 아니면 종류별 표준 1~10U를 고른 뒤 **Y축을 실제 U 높이에 맞춘다** —
  * "몇 U를 먹는가"는 FMS 실데이터라 근사로 넘길 수 없다.
  *
  * 장비 상태 경보(깜빡임·비컨)는 없앴다. 소스가 없는데 색을 칠하면 가짜 정상/가짜 장애가 된다.
@@ -521,7 +561,21 @@ function Server({
    * 카메라 위치·랙 방향·포커스를 보고 정하고, 여기서는 자기 자산의 결정만 구독한다.
    * 그래서 진입 즉시 전량 로딩이 구조적으로 불가능하다(랙 수십 대 × 장비 수백 대 대비).
    */
-  const photoPlanes = useMemo(() => findPhotoPlanes(model), [model])
+  const photoPlanes = useMemo(() => isStandardModel(server.model)
+    ? makeStandardPhotoPlanes(server.model) : findPhotoPlanes(model), [model, server.model])
+  useEffect(() => {
+    for (const plane of [photoPlanes.front, photoPlanes.rear]) {
+      if (plane?.procedural) model.add(plane.mesh)
+    }
+    return () => {
+      for (const plane of [photoPlanes.front, photoPlanes.rear]) {
+        if (!plane?.procedural) continue
+        model.remove(plane.mesh)
+        plane.mesh.geometry.dispose()
+        plane.material.dispose()
+      }
+    }
+  }, [model, photoPlanes])
   const photoDemand = useSyncExternalStore(
     useCallback((onChange: () => void) => subscribePhotoDemand(server.assetId, onChange), [server.assetId]),
     useCallback(() => getPhotoDemand(server.assetId), [server.assetId]),
@@ -689,10 +743,12 @@ function LayoutObjectModel({
   model,
   color,
   footprint,
+  elevation,
 }: {
   model: string
   color: string
   footprint: number
+  elevation: number
 }) {
   const url = assetUrl(`models/objects/${model}.glb?v=${MODEL_VERSION}`)
   const { scene } = useGLTF(url, GLTF_USE_DRACO, GLTF_USE_MESHOPT)
@@ -708,7 +764,7 @@ function LayoutObjectModel({
         정면 막대를 모델에는 붙이지 않는다 — 모델 자체가 정면을 말한다(항온항습기 LCD,
         UPS 도어 손잡이, 가스 소화 설비 압력계). 흰 막대를 덧대면 실사 형상 위에 겉돈다.
       */}
-      <primitive object={instance} position={[0, LAYOUT_OBJECT_BASE_Y + LAYOUT_PLATE_H, 0]} />
+      <primitive object={instance} position={[0, LAYOUT_OBJECT_BASE_Y + LAYOUT_PLATE_H + elevation, 0]} />
     </>
   )
 }
@@ -733,6 +789,7 @@ function LayoutObjectMesh({ object, tileSize }: { object: SceneObject; tileSize:
   // 1타일보다 조금 작게 — 옆 칸과 붙어 한 덩어리로 보이지 않게 칸 경계를 남긴다.
   const footprint = Math.max(0.12, tileSize * 0.84)
   const model = LAYOUT_OBJECT_MODELS[object.type]
+  const elevation = object.type === 'SENSOR' ? 1.2 : 0
   const box = <LayoutObjectBox color={object.color} heightM={heightM} footprint={footprint} />
 
   return (
@@ -742,7 +799,7 @@ function LayoutObjectMesh({ object, tileSize }: { object: SceneObject; tileSize:
     >
       {model ? (
         <Suspense fallback={box}>
-          <LayoutObjectModel model={model} color={object.color} footprint={footprint} />
+          <LayoutObjectModel model={model} color={object.color} footprint={footprint} elevation={elevation} />
         </Suspense>
       ) : box}
       {/*
@@ -765,7 +822,7 @@ function LayoutObjectMesh({ object, tileSize }: { object: SceneObject; tileSize:
         **이름표 칩(테두리·점)이 팔레트 색의 최종 보증이다** — 모델을 쓰는 오브젝트는 받침대가
         모델에 가려질 수 있어서, 2D 에디터와의 색 대응이 여기에 남는다.
       */}
-      <Html position={[0, LAYOUT_OBJECT_BASE_Y + Math.max(heightM + 0.14, 0.62), 0]} center distanceFactor={8} zIndexRange={[1, 0]}>
+      <Html position={[0, LAYOUT_OBJECT_BASE_Y + Math.max(heightM + elevation + 0.14, 0.62), 0]} center distanceFactor={8} zIndexRange={[1, 0]}>
         <div className="layout-object-label" style={{ borderColor: object.color }}>
           <i style={{ background: object.color }} />
           {object.label}
@@ -1653,7 +1710,7 @@ function ServerDetailPanel({
       <section className="server-telemetry">
         <div className="server-section-heading"><span>3D MODEL</span><small>형상 근사</small></div>
         <p className="rack-source-note">
-          {serverModelLabels[server.model]} 형상을 {server.units}U 높이에 맞춰 표시합니다.
+          {serverModelLabel(server.model)} 형상을 {server.units}U 높이에 맞춰 표시합니다.
           실제 제조사·모델명은 위 ASSET REGISTER 값입니다.
           {serverPhotoNote(server)}
         </p>
