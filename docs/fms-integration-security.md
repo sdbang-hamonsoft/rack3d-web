@@ -1367,3 +1367,30 @@ rack3d 는 일단 **실치수로 그리고 칸을 넘기기로** 했다. 근거�
 에만 있어서, 이번에도 그걸 찾느라 netis-fms 쪽 주석을 거슬러 올라가야 했다.
 → 배포 직후 서버에서 스크립트를 읽어 **`deploy/README.md`** 로 옮겼고, 배포팀이 매번 읽도록
 **`.claude/agents/deployer.md`**(프로젝트 전용 정의)도 함께 만들었다. 다음부터는 그 문서가 출발점이다.
+
+
+### 11-40. rack3d 배포 — 표준 모델·폴백 보완 `main-e3d84f6` (2026-09-11)
+
+사용자 명시 요청으로 커밋 3개(d3faec5 / 507992a / e3d84f6)를 main에 푸시하고 운영 배포했다.
+FMS 배치(랙 소속·좌표·방향·시작U·점유U)는 유지하며 형상 선택만 확장한다.
+
+- 빌드 커밋: `e3d84f6b5f3be2d180d2686ca07d5792a9095dce` (buru-ext 체크아웃에서 확인).
+- 새 이미지: `10.1.20.21:5000/rack3d-web:main-e3d84f6`.
+- 직전 운영본: `10.1.20.21:5000/rack3d-web:main-42782d6`.
+- 빌드: 익명 git 조회 가능 확인 후 기존 `build.yml`을 공개 저장소 URL로 실행했다.
+  `build.sh`의 대화형 GitHub 토큰 입력만 피한 문서화된 경로이며 플레이북/이미지 생성 로직은 동일하다.
+  Ansible 빌드 10 tasks, failed=0. 배포는 태그를 명시한 기존 `deploy.sh main-e3d84f6`, failed=0.
+- k8s: Ready=1, Updated=1, Desired=1. 신규 파드 `rack3d-web-764c69bbb6-pj9wd` Running.
+- 라이브 `/rack3d/` 200, `/rack3d/assets/index-etJBK-kP.js` 200 / 1,308,563 bytes.
+  번들 SHA256 `bee9a3ad01f6b4732afb0601141e1101b4c8e8d22f41d14a45d05564f038cb71`.
+  로컬 검증 빌드와 바이트 단위 일치. 이전 `index-CGAanznJ.js`는 404.
+- GLB 전체 31개 / 합계 6,280,908 bytes가 라이브에서 HTTP 200이며 저장소 SHA256과 모두 일치.
+  UPS는 391,684 bytes. 새 모델 캐시 버전은 14.
+  파일별 증거: `docs/deployments/2026-09-11-standard-models.json`.
+- 검증 중 Python urllib 요청이 HTTP 403을 받았다. 인증/보안 설정은 바꾸지 않았고,
+  curl로 동일 URL을 다시 요청해 전 파일 200 및 해시 일치를 검증했다. 403의 원인은 확정하지 않았다.
+- **미검증**: 실제 FMS 로그인 세션으로 운영 3D 화면 육안 확인. 로컬 스텁·카탈로그 QA는 완료했다.
+  BATTERY/SUPPRESSION은 여전히 FMS 타입 신설이 필요하다. 운영 UI에서 자동 생성하지 않는다.
+- 되돌리기: `ssh buru-ext '~/cicd/rack3d/deploy.sh main-42782d6'`.
+
+이 배포 결과 문서 커밋은 운영 코드 변경을 포함하지 않는다. 운영 이미지의 소스는 위 e3d84f6이다.
