@@ -111,7 +111,7 @@ const RACK_INNER_BOTTOM = RACK_BASE_HEIGHT_M
  * 랙만 안 바뀐다"로 나타나고 원인 추적이 오래 걸린다. **URL은 `useGLTF`와
  * `useGLTF.preload` 양쪽이 정확히 같아야** 프리로드가 효과를 낸다(다르면 두 번 받는다).
  */
-const MODEL_VERSION = '12'
+const MODEL_VERSION = '13'
 const SPLASH_DURATION = 3600
 const RACK_FOCUS_HEIGHT = 1.06
 const RACK_FOCUS_DISTANCE = 1.15

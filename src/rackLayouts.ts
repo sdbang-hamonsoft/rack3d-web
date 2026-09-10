@@ -311,7 +311,7 @@ export const LAYOUT_OBJECT_MODELS: Record<string, string> = {
  */
 export const LAYOUT_OBJECT_MODEL_HEIGHTS_M: Record<string, number> = {
   CRAC: 1.98,
-  UPS: 1.80,
+  UPS: 2.00,
   BATTERY: 1.55,
   SUPPRESSION: 1.42,
 }
