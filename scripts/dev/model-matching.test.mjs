@@ -2,14 +2,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
-import { pickServerModel, SERVER_MODEL_UNITS, toServerData, standardModelDepth } from '../../src/rackLayouts.ts'
+import { pickServerModel, SERVER_MODEL_UNITS, toServerData, standardModelDepth, buildZoneScene } from '../../src/rackLayouts.ts'
 
-test('vendor matching requires exact model identity and occupied U', () => {
+test('specific vendor model survives different FMS U spans and categories', () => {
   assert.equal(pickServerModel('Dell', 2, 'PowerEdge R760', 'SERVER'), 'dell-poweredge-r760')
   assert.equal(pickServerModel('HPE', 1, 'ProLiant DL360 Gen11', 'SERVER'), 'hpe-proliant-dl360-gen11')
   assert.equal(pickServerModel('Cisco Systems', 2, 'UCS C240 M7', 'SERVER'), 'cisco-ucs-c240-m7')
   for (const model of ['R760xd', 'R740', null]) assert.equal(pickServerModel('Dell', 2, model, 'SERVER'), 'standard-server-2u')
-  assert.equal(pickServerModel('Dell', 4, 'PowerEdge R760', 'SERVER'), 'standard-server-4u')
+  assert.equal(pickServerModel('Dell', 4, 'PowerEdge R760', 'SERVER'), 'dell-poweredge-r760')
   assert.equal(pickServerModel('Not Dell', 2, 'R760', 'SERVER'), 'standard-server-2u')
   assert.equal(pickServerModel('Cisco', 1, 'Nexus 93180YC-EX', 'NETWORK'), 'standard-network-1u')
 })
@@ -34,4 +34,38 @@ test('FMS metadata stays intact when an unknown model uses a standard chassis', 
   assert.equal(result.startU, 3)
   assert.equal(result.hasFront, true)
   assert.equal(toServerData({ ...asset, rackEndU: 2 }), null)
+})
+
+test('explicit Standard codes select the family without relying on category', () => {
+  assert.equal(pickServerModel('Standard', 2, 'SDN-u2', null), 'standard-network-2u')
+  assert.equal(pickServerModel('Standard', 4, 'SDN-u3', 'SERVER'), 'standard-network-4u')
+  assert.equal(pickServerModel('Standard', 3, 'SD-u3', 'NETWORK'), 'standard-server-3u')
+  assert.equal(pickServerModel('Cisco', 2, 'UCS C240 M7', 'NETWORK'), 'cisco-ucs-c240-m7')
+})
+test('model selection cannot change FMS rack membership, coordinates, direction or U placement', () => {
+  const racks = [{ locationId: 12, name: 'B', rackUnits: 42 }, { locationId: 11, name: 'A', rackUnits: 42 }]
+  const layout = { grid: { cols: 12, rows: 8, tileMm: 600 }, objects: [
+    { id: 1, type: 'RACK', x: 4, z: 3, dir: 'WEST', rack: { locationId: 11 } },
+    { id: 2, type: 'RACK', x: 2, z: 1, dir: 'EAST', rack: { locationId: 12 } },
+  ] }
+  for (const [manufacturer, modelName, category, expected] of [
+    ['Dell', 'PowerEdge R760', 'SERVER', 'dell-poweredge-r760'],
+    ['Standard', 'SDN-u3', 'SERVER', 'standard-network-4u'],
+    ['Unknown', 'Unknown', 'SERVER', 'standard-server-4u'],
+  ]) {
+    const maps = [
+      { rack: { locationId: 11 }, assets: [{ id: 101, rackStartU: 7, rackEndU: 10, manufacturer, modelName, category }] },
+      { rack: { locationId: 12 }, assets: [] },
+    ]
+    const before = JSON.stringify({ racks, layout, maps })
+    const scene = buildZoneScene(racks, layout, maps)
+    const rack = scene.racks.find(r => r.id === 'fms-rack-11')
+    assert.deepEqual(rack.placement, { tileX: 4, tileZ: 3, dir: 'WEST', rotation: Math.PI * 1.5 })
+    assert.equal(rack.servers[0].assetId, 101)
+    assert.equal(rack.servers[0].startU, 7)
+    assert.equal(rack.servers[0].units, 4)
+    assert.equal(rack.servers[0].model, expected)
+    assert.equal(scene.racks.find(r => r.id === 'fms-rack-12').servers.length, 0)
+    assert.equal(JSON.stringify({ racks, layout, maps }), before)
+  }
 })

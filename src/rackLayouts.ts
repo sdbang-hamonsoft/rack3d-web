@@ -126,17 +126,21 @@ const exactModels: { manufacturers: string[]; models: string[]; model: ServerMod
   { manufacturers: ['cisco', 'ciscosystems', 'ciscosystemsinc'], models: ['ucsc240m7', 'c240m7'], model: 'cisco-ucs-c240-m7' },
 ]
 
-/** Exact identity AND U match first; otherwise category-specific neutral geometry.
- * >10U uses the 10U chassis scaled to the actual occupied height, never a missing URL.
- * Unknown categories use neutral server geometry, without changing the FMS category.
+/** Select geometry only. FMS rack membership, startU and occupied units never change.
+ * A known vendor model retains the existing U-height scaling, even when its native U differs.
+ * Explicit Standard model codes select their family; unresolved objects fall back by category.
  */
 export function pickServerModel(manufacturer: string | null, units: number, modelName: string | null = null, category: string | null = null): ServerModel {
   const maker = normalizeModel(manufacturer)
   const name = normalizeModel(modelName)
-  const network = category?.trim().toUpperCase() === 'NETWORK'
-  const exact = !network && exactModels.find((entry) => entry.manufacturers.includes(maker)
-    && entry.models.includes(name) && SERVER_MODEL_UNITS[entry.model] === units)
+  const exact = exactModels.find((entry) => entry.manufacturers.includes(maker)
+    && entry.models.includes(name))
   if (exact) return exact.model
+
+  const explicitNetwork = maker === 'standard' && /^sdnu(?:10|[1-9])$/.test(name)
+  const explicitServer = maker === 'standard' && /^sdu(?:10|[1-9])$/.test(name)
+  const network = explicitNetwork || (!explicitServer && category?.trim().toUpperCase() === 'NETWORK')
+  // Model names never override the U span assigned by FMS. >10U retains the scaling path.
   const u = Math.max(1, Math.min(10, Math.floor(Number.isFinite(units) ? units : 1))) as StandardUnit
   return network ? `standard-network-${u}u` : `standard-server-${u}u`
 }
