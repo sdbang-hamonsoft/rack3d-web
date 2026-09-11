@@ -1394,3 +1394,20 @@ FMS 배치(랙 소속·좌표·방향·시작U·점유U)는 유지하며 형상 
 - 되돌리기: `ssh buru-ext '~/cicd/rack3d/deploy.sh main-42782d6'`.
 
 이 배포 결과 문서 커밋은 운영 코드 변경을 포함하지 않는다. 운영 이미지의 소스는 위 e3d84f6이다.
+
+## 11-41. CCTV 운영 배포 (2026-09-11)
+
+- 사용자 기존 커밋·푸시·배포 요청에 이어 CCTV 추가분 반영.
+- 커밋 `faf7f43b4127b155238a326f2a793172e1a27fe1`, 이미지 `main-faf7f43`.
+  직전 운영 `main-e3d84f6`. 서버 build-cache HEAD와 배포 이미지 일치.
+- buru-ext의 기존 ansible build.yml 공개 저장소 URL 경로 사용(토큰 대화형 입력 없음),
+  deploy.sh에 태그 명시. 롤링 성공, `rack3d-web-5df856f899-kqznb` Ready 1/1.
+- CCTV GLB HTTP 200 / 94,224 bytes / SHA256
+  `e0e555e7cde75c552e9ca755ee8e5c1f9bf3e2b77d56e0a919cd4936cd6caa1f`.
+  전체 GLB 32개, 6,375,132 bytes, 소스 SHA256 전부 일치.
+- 새 번들 `index-Cqa9ru-z.js` HTTP 200 / 1,308,604 bytes / 로컬 빌드와 동일.
+  이전 `index-etJBK-kP.js` HTTP 404. MODEL_VERSION=15.
+- 근거: `docs/deployments/2026-09-11-cctv.json`.
+- 로컬 스텁에서 CCTV 모델 로딩·설치 좌표·육안 확인. **운영 FMS 인증 후 UI 검수는 하지 못했다.**
+  CCTV는 기존 타입이므로 FMS가 CCTV 배치를 보내면 모델로 표현된다.
+- 되돌리기: `ssh buru-ext '~/cicd/rack3d/deploy.sh main-e3d84f6'`.
