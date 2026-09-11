@@ -212,6 +212,9 @@ const layoutObjects = [
   // 여기 넣어 두는 것은 "FMS 가 내보내기 시작하면 rack3d 를 안 고쳐도 모델이 붙는다"를
   // 실제로 확인하기 위해서다. FMS 가 서빙하기 전까지 실환경에서는 나오지 않는다.
   layoutObject({ id: 13, type: 'BATTERY', x: 11, z: 6, dir: 'NORTH', label: '배터리 랙' }),
+  // Proposed standalone type: this fixture does not imply FMS production support.
+  layoutObject({ id: 19, type: 'ACCESS', x: 1, z: 7, dir: 'NORTH', label: '출입태깅기 SD-ATR' }),
+  layoutObject({ id: 20, type: 'GATE', x: 1, z: 5, dir: 'EAST', label: '기존 출입게이트' }),
   layoutObject({ id: 17, type: 'SEISMIC', x: 1, z: 0, dir: 'NORTH', label: '지진감지 SD-DTS' }),
   layoutObject({ id: 18, type: 'FIRE', x: 3, z: 0, dir: 'NORTH', label: '화재감지 SD-FDS' }),
   layoutObject({ id: 16, type: 'CCTV', x: 10, z: 7, dir: 'NORTH', label: 'CCTV SD-CCTV' }),

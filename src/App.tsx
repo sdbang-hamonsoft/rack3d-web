@@ -790,7 +790,7 @@ function LayoutObjectMesh({ object, tileSize }: { object: SceneObject; tileSize:
   const footprint = Math.max(0.12, tileSize * 0.84)
   const model = LAYOUT_OBJECT_MODELS[object.type]
   // Illustrative installation height; FMS supplies no per-object mounting elevation.
-  const elevation = object.type === 'SENSOR' ? 1.2 : object.type === 'CCTV' ? 2.2 : object.type === 'FIRE' ? 2.2 : 0
+  const elevation = (object.type === 'SENSOR' || object.type === 'ACCESS') ? 1.2 : object.type === 'CCTV' ? 2.2 : object.type === 'FIRE' ? 2.2 : 0
   const box = <LayoutObjectBox color={object.color} heightM={heightM} footprint={footprint} />
 
   return (

@@ -279,6 +279,7 @@ export const LAYOUT_OBJECT_COLORS: Record<string, string> = {
   CCTV: '#388E3C',
   DOOR: '#4E342E',
   GATE: '#616161',
+  ACCESS: '#00695C',
   GAS: '#F57C00',
   SEISMIC: '#512DA8',
 }
@@ -332,6 +333,8 @@ export const LAYOUT_OBJECT_MODELS: Record<string, string> = {
   WATER: 'water-leak-sensor',
   DOOR: 'door',
   CCTV: 'cctv',
+  // Proposed standalone layout type; FMS palette/schema support is pending.
+  ACCESS: 'access-tag-reader',
   POWER: 'distribution-board',
   SEISMIC: 'seismic-sensor',
   FIRE: 'fire-detector',
@@ -358,6 +361,7 @@ export const LAYOUT_OBJECT_MODEL_HEIGHTS_M: Record<string, number> = {
   WATER: 0.023,
   DOOR: 2.10,
   CCTV: 0.15,
+  ACCESS: 0.11,
   POWER: 2.20,
   SEISMIC: 0.08,
   FIRE: 0.07,

@@ -69,3 +69,21 @@ test('model selection cannot change FMS rack membership, coordinates, direction 
     assert.equal(JSON.stringify({ racks, layout, maps }), before)
   }
 })
+
+
+test('standalone access reader preserves GATE and uses only supplied placement', async () => {
+  const { LAYOUT_OBJECT_MODELS } = await import('../../src/rackLayouts.ts')
+  const gate = { id: 1, type: 'GATE', x: 2, z: 3, dir: 'EAST', label: 'Gate', rack: null }
+  const reader = { id: 2, type: 'ACCESS', x: 5, z: 1, dir: 'WEST', label: 'Reader', rack: null }
+  const layout = { grid: { cols: 8, rows: 6, tileMm: 600 }, objects: [gate, reader] }
+  const before = JSON.stringify(layout)
+  const scene = buildZoneScene([], layout, [])
+  assert.equal(scene.objects.length, 2)
+  assert.equal(LAYOUT_OBJECT_MODELS.GATE, undefined)
+  assert.equal(LAYOUT_OBJECT_MODELS.ACCESS, 'access-tag-reader')
+  assert.equal(scene.objects[0].heightM, 1.2)
+  assert.equal(scene.objects[1].heightM, .11)
+  assert.deepEqual(scene.objects[1].placement, { tileX: 5, tileZ: 1, dir: 'WEST', rotation: Math.PI * 1.5 })
+  assert.equal(JSON.stringify(layout), before)
+  assert.equal(buildZoneScene([], { ...layout, objects: [gate] }, []).objects.length, 1)
+})
