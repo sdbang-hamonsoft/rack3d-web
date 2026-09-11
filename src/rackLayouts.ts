@@ -332,6 +332,9 @@ export const LAYOUT_OBJECT_MODELS: Record<string, string> = {
   WATER: 'water-leak-sensor',
   DOOR: 'door',
   CCTV: 'cctv',
+  POWER: 'distribution-board',
+  SEISMIC: 'seismic-sensor',
+  FIRE: 'fire-detector',
   BATTERY: 'battery-rack',
   SUPPRESSION: 'gas-suppression',
 }
@@ -355,6 +358,9 @@ export const LAYOUT_OBJECT_MODEL_HEIGHTS_M: Record<string, number> = {
   WATER: 0.023,
   DOOR: 2.10,
   CCTV: 0.15,
+  POWER: 2.20,
+  SEISMIC: 0.08,
+  FIRE: 0.07,
 }
 
 /** 모르는 종류의 박스 높이(m). */

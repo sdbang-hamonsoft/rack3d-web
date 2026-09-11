@@ -28,6 +28,8 @@ test('all 20 GLBs fit their U slot, rail width, and both photo surfaces', async 
 })
 test('facility dimensions use latest drawings and floor-centred geometry', async () => {
   for (const [name, w, h, d] of [
+    ['distribution-board', .8, 2.2, .6], ['seismic-sensor', .15, .08, .1],
+    ['fire-detector', .16, .07, .1], ['access-tag-reader', .22, .11, .1503],
     ['cctv', .04, .15, .18],
     ['battery-rack', .8, 2, 1], ['gas-suppression', .45, 2.4, .4],
     ['door', .9, 2.1, .096], ['temperature-humidity-sensor', .08, .12, .058],
