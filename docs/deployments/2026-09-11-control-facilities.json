@@ -1,0 +1,238 @@
+{
+  "models": 36,
+  "modelBytes": 6964156,
+  "indexStatus": 200,
+  "bundle": "/rack3d/assets/index-DIoygu87.js",
+  "bundleStatus": 200,
+  "bundleBytes": 1308725,
+  "bundleSha256": "ba00b07c7aaa2ea3ca5fc10ab412b5c87969576fce0967f95acabecf882d6726",
+  "localBundleMatches": true,
+  "files": [
+    {
+      "file": "models/standard-server-3u.glb",
+      "status": 200,
+      "bytes": 80140,
+      "sha256": "1ae3543969d0aa3cef9f8969af8c4ead05277b3cf3b396c824f8a48d2fa12abd"
+    },
+    {
+      "file": "models/cisco-ucs-c240-m7.glb",
+      "status": 200,
+      "bytes": 1054984,
+      "sha256": "6df8e4bce9120669096686e5bd22ccb5566b6678dfbf7ea37c44ea38a043b164"
+    },
+    {
+      "file": "models/standard-network-2u.glb",
+      "status": 200,
+      "bytes": 93648,
+      "sha256": "0b356b74172a4288ff0cd3f945888e684f6c78b56fa1a20e62e17bf7d1db8d98"
+    },
+    {
+      "file": "models/standard-network-3u.glb",
+      "status": 200,
+      "bytes": 124756,
+      "sha256": "aab6a29f73f756854504f105eb14dcab4dc3104c8c4382d7164d066b3b9917b6"
+    },
+    {
+      "file": "models/standard-server-2u.glb",
+      "status": 200,
+      "bytes": 67180,
+      "sha256": "3802a62e7f3a57c7af25c302fb366c7afa16ea6faf630a670b734b7fa2f2439f"
+    },
+    {
+      "file": "models/dell-poweredge-r760.glb",
+      "status": 200,
+      "bytes": 401088,
+      "sha256": "9e690ad85c68fe34131978c7252532df4e1a0e66477d4b0e7a89cf892c78cb8d"
+    },
+    {
+      "file": "models/standard-network-4u.glb",
+      "status": 200,
+      "bytes": 155860,
+      "sha256": "c96b6be5ed4586dfaf8728ff5c4b83c6815ad6ab8c8c210fa78c08f7c39a7192"
+    },
+    {
+      "file": "models/standard-server-9u.glb",
+      "status": 200,
+      "bytes": 72356,
+      "sha256": "544884f082c2fd336566d5f5accf7e33d1740f84a4ad8c52f525b43b457819ff"
+    },
+    {
+      "file": "models/standard-network-8u.glb",
+      "status": 200,
+      "bytes": 280284,
+      "sha256": "f01d4b817479e7bb8223c8acd90bfd718f7aaab72dcdb272c4bacff7b2f4b436"
+    },
+    {
+      "file": "models/standard-server-5u.glb",
+      "status": 200,
+      "bytes": 94384,
+      "sha256": "dce549345d949a951542c20330ee86eb428f2d24f996f3763b1d60f631359830"
+    },
+    {
+      "file": "models/standard-server-4u.glb",
+      "status": 200,
+      "bytes": 93096,
+      "sha256": "7863ffbf95c9b889978b5769e8997e99c180055fbeda1d935393af41c67d93ab"
+    },
+    {
+      "file": "models/standard-network-9u.glb",
+      "status": 200,
+      "bytes": 311384,
+      "sha256": "441f281549edad4c23efd0a9e0b66b4433d47f6a6176404bfad279d694a4d31e"
+    },
+    {
+      "file": "models/standard-server-8u.glb",
+      "status": 200,
+      "bytes": 71060,
+      "sha256": "4be397ff754a18228f2fd1a5a8ce853407c4f61905b0c0506300dff00e59a675"
+    },
+    {
+      "file": "models/standard-network-5u.glb",
+      "status": 200,
+      "bytes": 186968,
+      "sha256": "61dd83a0ee7cdc1b61a5ee23285b07b39ca16162535e0582f7ea937cacd57f32"
+    },
+    {
+      "file": "models/standard-network-6u.glb",
+      "status": 200,
+      "bytes": 218072,
+      "sha256": "82eaa038296c0604222325a2591782c1f83acb56f56f09c5640c2639077f1abe"
+    },
+    {
+      "file": "models/standard-server-7u.glb",
+      "status": 200,
+      "bytes": 69768,
+      "sha256": "39407f73c7e1e17f12341e34262d689245f30697d88610f339bbb9e990f99a97"
+    },
+    {
+      "file": "models/standard-server-6u.glb",
+      "status": 200,
+      "bytes": 68468,
+      "sha256": "429453bdda20ef82ff8eed0cdf1a861ee3eac9208ccbb5c37e91272506729fd6"
+    },
+    {
+      "file": "models/standard-network-7u.glb",
+      "status": 200,
+      "bytes": 249180,
+      "sha256": "b3b63df86f60bfe2b69be442d414d5395a82c041bd7ef1feaa153105e04a4fbb"
+    },
+    {
+      "file": "models/standard-server-10u.glb",
+      "status": 200,
+      "bytes": 73652,
+      "sha256": "aa86017aa1c37bac42fe54cd538c675b7bf2a553e7118fc029aa94801df462d3"
+    },
+    {
+      "file": "models/standard-server-1u.glb",
+      "status": 200,
+      "bytes": 54212,
+      "sha256": "bf89cfae8beb0b648fb1ffe9fcfc4df5bf5e7cca2689b506747f81bae8ddc738"
+    },
+    {
+      "file": "models/rack-42u.glb",
+      "status": 200,
+      "bytes": 220460,
+      "sha256": "1c460cb10a603efdf699e3273f20da9964981ed89ab61bf96f32109a837dc8cc"
+    },
+    {
+      "file": "models/standard-network-10u.glb",
+      "status": 200,
+      "bytes": 342488,
+      "sha256": "be30bb6b1b46dee011c38705856d7aaccfa0f0fe745a98c13869146b7ccadd9a"
+    },
+    {
+      "file": "models/hpe-proliant-dl360-gen11.glb",
+      "status": 200,
+      "bytes": 679276,
+      "sha256": "6541a6d90fb4f03163d7be3cd222df71d12f54b93d3e607160cb8dedc4b95aff"
+    },
+    {
+      "file": "models/standard-network-1u.glb",
+      "status": 200,
+      "bytes": 93640,
+      "sha256": "14a88a103423ae51f45a79be129eb75cf7b70df43fb8566915ad661b668e35cc"
+    },
+    {
+      "file": "models/objects/ups.glb",
+      "status": 200,
+      "bytes": 391684,
+      "sha256": "d1f4f8711bcb8a5ecdf8841b68ea87c1c95067f147063cbc2205af1af80a9be5"
+    },
+    {
+      "file": "models/objects/seismic-sensor.glb",
+      "status": 200,
+      "bytes": 100292,
+      "sha256": "89bec33a4ee93190a1bb1f548cce21ad83ace9199b70dad6c8b2b3fddf1f3a12"
+    },
+    {
+      "file": "models/objects/door.glb",
+      "status": 200,
+      "bytes": 21304,
+      "sha256": "80406316feeb568f9de83d7f31038c743c75fc420b621916200ae0f7bcb21cd8"
+    },
+    {
+      "file": "models/objects/fire-detector.glb",
+      "status": 200,
+      "bytes": 116224,
+      "sha256": "531bc28cdc9b475813988c18467461a57da83b633bd4082d20b8e11279f68d4b"
+    },
+    {
+      "file": "models/objects/distribution-board.glb",
+      "status": 200,
+      "bytes": 130452,
+      "sha256": "ec67d674d51b807b77f7162489c06cf0319b5245dd456e33b17c79c13c0d0513"
+    },
+    {
+      "file": "models/objects/water-leak-sensor.glb",
+      "status": 200,
+      "bytes": 54416,
+      "sha256": "bb367dc8acedc7800b426f005707e2e7f5fba26e9e6cea5584e502c84f663a7b"
+    },
+    {
+      "file": "models/objects/temperature-humidity-sensor.glb",
+      "status": 200,
+      "bytes": 152312,
+      "sha256": "91439792b869495d6b3fee1a8857e484c32e2f73f3a3fc7644d678c059d28cd1"
+    },
+    {
+      "file": "models/objects/gas-suppression.glb",
+      "status": 200,
+      "bytes": 128376,
+      "sha256": "c343f1777e4ddf12aaa2b009d4ff95173e518501648b2f2a440012b018282399"
+    },
+    {
+      "file": "models/objects/precision-ac.glb",
+      "status": 200,
+      "bytes": 114432,
+      "sha256": "cc69cd5c93832192410bebd0326649e74b19dccc6ea83016b4d097993ba6b4bb"
+    },
+    {
+      "file": "models/objects/access-tag-reader.glb",
+      "status": 200,
+      "bytes": 242056,
+      "sha256": "20e7da91631cb9a9a866d3451e8147148e5dca043f5f63a801119f208e509488"
+    },
+    {
+      "file": "models/objects/cctv.glb",
+      "status": 200,
+      "bytes": 94224,
+      "sha256": "e0e555e7cde75c552e9ca755ee8e5c1f9bf3e2b77d56e0a919cd4936cd6caa1f"
+    },
+    {
+      "file": "models/objects/battery-rack.glb",
+      "status": 200,
+      "bytes": 261980,
+      "sha256": "cf5fa8c0d93314ce3af0e27e5c6c81d20f0f5b356f52e83075c64a7063d32cbf"
+    }
+  ],
+  "date": "2026-09-11",
+  "image": "main-0cd3ec5",
+  "commit": "0cd3ec54702f8b7e03c69827b2a6a15893565a4b",
+  "previousImage": "main-faf7f43",
+  "pod": "rack3d-web-57cd97558f-nrx5f",
+  "ready": "1/1",
+  "previousBundleStatus": 404,
+  "authenticatedProductionUiVerified": false,
+  "accessTagReaderMapped": false,
+  "localDevelopmentProcessesStopped": true
+}

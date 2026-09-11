@@ -1411,3 +1411,21 @@ FMS 배치(랙 소속·좌표·방향·시작U·점유U)는 유지하며 형상 
 - 로컬 스텁에서 CCTV 모델 로딩·설치 좌표·육안 확인. **운영 FMS 인증 후 UI 검수는 하지 못했다.**
   CCTV는 기존 타입이므로 FMS가 CCTV 배치를 보내면 모델로 표현된다.
 - 되돌리기: `ssh buru-ext '~/cicd/rack3d/deploy.sh main-e3d84f6'`.
+
+## 11-42. 배전반·지진·화재·출입태깅기 GLB 배포 (2026-09-11)
+
+- 커밋 `0cd3ec54702f8b7e03c69827b2a6a15893565a4b`, 이미지 `main-0cd3ec5`.
+  직전 `main-faf7f43`. 서버 build-cache HEAD 및 태그 대조 완료.
+- 기존 buru-ext ansible build.yml 공개 Git URL 사용 후 deploy.sh에 태그 명시.
+  `rack3d-web-57cd97558f-nrx5f` Ready 1/1, rollout 완료.
+- 네 GLB 모두 HTTP 200 및 소스 SHA256 일치: 배전반 130452, 지진 100292,
+  화재 116224, 태깅기 242056 bytes. 전체 36 GLB / 6,964,156 bytes 해시 일치.
+- JS `index-DIoygu87.js` HTTP 200 / 1,308,725 bytes, 로컬 dist와 동일.
+  이전 `index-Cqa9ru-z.js` 404. MODEL_VERSION=16.
+- POWER/SEISMIC/FIRE는 기존 FMS 타입. GATE는 출입게이트이므로 태깅기 대체 여부 답변 대기:
+  태깅기는 모델 파일·개발 카탈로그까지만 포함, GATE 렌더 변경 없음.
+- 로컬 스텁 앱의 3종 배치와 카탈로그 4종 검수 완료.
+  **운영 FMS 로그인 후 UI 육안 검수는 미수행**. 사용자 검수 필요.
+- 사용자가 요청한 정리 완료: Vite·스텁·테스트 Chrome 종료, 5174/8777/9222 리스너 없음.
+- 증거: `docs/deployments/2026-09-11-control-facilities.json`.
+- 되돌리기: `ssh buru-ext '~/cicd/rack3d/deploy.sh main-faf7f43'`.

@@ -613,3 +613,7 @@ POWER→distribution-board, SEISMIC→seismic-sensor, FIRE→fire-detector 연�
 
 MODEL_VERSION=16. GLB 실측 치수 검사 포함 Node 7개, 빌드·린트 통과.
 기존 번들 500kB 경고는 유지. Blender GLB 재수입 렌더 4종 및 Three.js 카탈로그 4종 로딩·치수 확인.
+
+로컬 FMS 스텁 앱에서 POWER/SEISMIC/FIRE GLB v16 로딩과 씬을 확인했다.
+검수 후 이전부터 실행하던 Vite(5174), FMS 스텁(8777), 테스트 Chrome(9222)을 종료했다.
+해당 리스너 및 이 프로젝트의 Vite/스텁/Blender/디버깅 Chrome 프로세스가 남지 않은 것을 확인했다.
