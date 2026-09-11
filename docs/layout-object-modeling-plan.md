@@ -608,7 +608,8 @@ SD-DB / SD-DTS / SD-FDS / SD-ATR를 확인했다. 원본 그림:
 POWER→distribution-board, SEISMIC→seismic-sensor, FIRE→fire-detector 연결.
 지진감지는 바닥, 화재감지는 FMS 설치 높이가 없어 하단 2.2m를 표현용으로 적용.
 출입태깅기 GLB와 개발 카탈로그는 완성. FMS GATE는 현재 **출입게이트**이므로
-이를 태깅기로 대체할지 사용자에게 질의했으며, 답변 전에는 GATE 매핑을 유지한다.
+사용자가 2026-09-11 **모델만 만들고 GATE 유지**로 확정했다.
+사용자가 추후 변경을 알릴 때만 연결을 재검토하며, 자동으로 GATE를 대체하지 않는다.
 랙 내부 장비 매칭·소속·U·타일 좌표·방위 로직은 변경하지 않는다.
 
 MODEL_VERSION=16. GLB 실측 치수 검사 포함 Node 7개, 빌드·린트 통과.
