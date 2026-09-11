@@ -9,6 +9,7 @@ const status = document.querySelector('#status')
 const entries = [
   ['objects/ups', 'UPS'], ['objects/temperature-humidity-sensor', '온습도센서'],
   ['objects/battery-rack', '배터리랙'], ['objects/gas-suppression', '가스소화설비'],
+  ['objects/cctv', 'CCTV · Standard SD-CCTV'],
   ['objects/door', '도어 + 접점센서'], ['objects/water-leak-sensor', '누수감지'],
   ...['server', 'network'].flatMap(kind => Array.from({ length: 10 }, (_, i) =>
     [`standard-${kind}-${i + 1}u`, `${kind === 'server' ? '표준서버' : '표준네트워크'} ${i + 1}U`])),
@@ -58,7 +59,7 @@ async function load() {
   status.textContent = '불러오는 중…'
   document.body.dataset.loaded = ''
   try {
-    const gltf = await loader.loadAsync(`${import.meta.env.BASE_URL}models/${select.value}.glb?v=14`)
+    const gltf = await loader.loadAsync(`${import.meta.env.BASE_URL}models/${select.value}.glb?v=15`)
     if (id !== ticket) { dispose(gltf.scene); return }
     if (current) { scene.remove(current); dispose(current) }
     current = gltf.scene

@@ -566,3 +566,21 @@ FMS 배치 데이터를 소비하는 랙 소속(locationId)·좌표·방향·U �
 검증: 랙 목록과 u맵 순서를 뒤집은 픽스처에서 특정 모델·표준 명시·미특정 세 경우 모두
 같은 랙/좌표/방향/U07~U10에 배치됨을 확인했다. 입력 데이터도 변경되지 않는다.
 모델 선택 회귀 검사 5개와 빌드·린트 통과. 모델 GLB 자체는 변경하지 않았다.
+
+## 14. CCTV — Standard SD-CCTV (2026-09-11)
+
+사용자 Google Sheets `1MG7dnpH5BLn4kx_-OrsIImLRW7pV8RskB9XyT4HofRg`를 XLSX로
+내보내 CCTV 시트의 제조사 Standard / 모델 SD-CCTV와 삽입 도면을 확인했다.
+원본 그림은 `artifacts/reference/cctv-sheet.png`. 시트에는 CCTV와 무관한 누수센서
+평면도·케이블 규격이 섞여 있어 카메라 정면·측면·아이소메트릭만 참고했다.
+
+- Blender 백그라운드: `blender/objects/cctv.py` → `public/models/objects/cctv.glb`.
+- 도면 주요 외곽 폭 40 × 깊이 180 × 높이 150mm, 렌즈 외경 35mm, 후드 길이 80mm.
+  도면에 없는 세부 두께·지지암 위치는 형상 해석이며 제조사 CAD와 동일하다고 보장하지 않는다.
+- 흰 하우징/차양, 렌즈/비발광 IR 창, 가동 조인트, 벽면 브래킷/나사, PoE 케이블.
+  1,880 triangles, 4 material groups, 텍스처 없음. 영상·전원 상태를 꾸며 표시하지 않는다.
+- 기존 FMS `CCTV` 타입만 GLB로 연결. tileX/Z 및 방위는 기존 FMS 배치 그대로다.
+  FMS 설치높이 필드가 없어 하단 2.2m는 **표현용 가정**이다. 실제 벽/천장을 생성하지 않는다.
+- MODEL_VERSION=15. 개발 카탈로그 CCTV 항목과 스텁 fixture 추가.
+- GLB 치수 회귀 검사 포함 Node 7개 통과, 빌드/린트 통과(기존 JS 500kB 경고 유지).
+  Blender 재수입 렌더 및 Three.js 카탈로그 로딩/치수/형상 확인.

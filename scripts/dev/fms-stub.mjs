@@ -212,6 +212,7 @@ const layoutObjects = [
   // 여기 넣어 두는 것은 "FMS 가 내보내기 시작하면 rack3d 를 안 고쳐도 모델이 붙는다"를
   // 실제로 확인하기 위해서다. FMS 가 서빙하기 전까지 실환경에서는 나오지 않는다.
   layoutObject({ id: 13, type: 'BATTERY', x: 11, z: 6, dir: 'NORTH', label: '배터리 랙' }),
+  layoutObject({ id: 16, type: 'CCTV', x: 10, z: 7, dir: 'NORTH', label: 'CCTV SD-CCTV' }),
   layoutObject({ id: 15, type: 'WATER', x: 4, z: 7, dir: 'SOUTH', label: '누수감지' }),
   layoutObject({ id: 14, type: 'SUPPRESSION', x: 7, z: 7, dir: 'NORTH', label: '가스 소화 설비' }),
 ]

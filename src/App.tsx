@@ -113,7 +113,7 @@ const RACK_INNER_BOTTOM = RACK_BASE_HEIGHT_M
  * 랙만 안 바뀐다"로 나타나고 원인 추적이 오래 걸린다. **URL은 `useGLTF`와
  * `useGLTF.preload` 양쪽이 정확히 같아야** 프리로드가 효과를 낸다(다르면 두 번 받는다).
  */
-const MODEL_VERSION = '14'
+const MODEL_VERSION = '15'
 const SPLASH_DURATION = 3600
 const RACK_FOCUS_HEIGHT = 1.06
 const RACK_FOCUS_DISTANCE = 1.15
@@ -789,7 +789,8 @@ function LayoutObjectMesh({ object, tileSize }: { object: SceneObject; tileSize:
   // 1타일보다 조금 작게 — 옆 칸과 붙어 한 덩어리로 보이지 않게 칸 경계를 남긴다.
   const footprint = Math.max(0.12, tileSize * 0.84)
   const model = LAYOUT_OBJECT_MODELS[object.type]
-  const elevation = object.type === 'SENSOR' ? 1.2 : 0
+  // Illustrative installation height; FMS supplies no per-object mounting elevation.
+  const elevation = object.type === 'SENSOR' ? 1.2 : object.type === 'CCTV' ? 2.2 : 0
   const box = <LayoutObjectBox color={object.color} heightM={heightM} footprint={footprint} />
 
   return (
