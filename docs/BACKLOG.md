@@ -4,13 +4,6 @@
 
 ## 할 일
 
-- [ ] 🛠 2026-09-30 고객사 브랜드명 연동 — 이미지 빌드 대기
-  - ✅ 기획: 공개 /api/auth/branding productName 사용, 실패 시 NETIS FMS 3D 관제. 하몬소프트 공급사 로고 유지.
-  - 인증 클라이언트와 분리한 credentials: omit 조회, 부팅 비차단·유한 timeout. 텍스트 변경으로 별도 디자인 단계 생략.
-  - ✅ 구현·리뷰 통과: 기본 HTML/title/meta/스플래시/세션 안내/로비/전산실 헤더 연동, 인증 처리와 독립.
-  - ✅ build/lint/Node 11개 검사 및 dist 바이너리 포함 burunet 잔존 0. 브라우저 10/10 및 데스크톱·모바일 3D 헤더 QA 통과.
-  - ✅ QA: branding 1회·refresh 1회, CSP 위반 0, 390px 가로 넘침 0. 테스트 서버/브라우저·프로필 정리.
-  - 커밋·푸시 후 buru-ext 이미지 빌드만 수행(운영 배포 제외).
 
 - [ ] 2026-09-11 배전반·지진감지·화재감지·출입태깅기
   - ✅ Google Sheets 4종 모델 제작, 원본 그림·Blender 스크립트·GLB 저장.
@@ -110,6 +103,18 @@
   - ⚠️ 테스트 이미지는 160×320(세로가 긴 비율)이라 랙 규격(1U≈10:1)과 어긋난다. 실 장비 정면 크롭이 들어와야 제대로 보인다(R5)
 
 ## 완료
+
+- [x] ✅ 2026-09-30 고객사 브랜드명 연동·설치 번들용 이미지 빌드 완료
+  - ✅ 기획: 공개 /api/auth/branding productName 사용, 실패 시 NETIS FMS 3D 관제. 하몬소프트 공급사 로고 유지.
+  - 인증 클라이언트와 분리한 credentials: omit 조회, 부팅 비차단·유한 timeout. 텍스트 변경으로 별도 디자인 단계 생략.
+  - ✅ 구현·리뷰 통과: 기본 HTML/title/meta/스플래시/세션 안내/로비/전산실 헤더 연동, 인증 처리와 독립.
+  - ✅ build/lint/Node 11개 검사 및 dist 바이너리 포함 burunet 잔존 0. 브라우저 10/10 및 데스크톱·모바일 3D 헤더 QA 통과.
+  - ✅ QA: branding 1회·refresh 1회, CSP 위반 0, 390px 가로 넘침 0. 테스트 서버/브라우저·프로필 정리.
+  - ✅ 커밋 b991ce5 → 이미지 main-b991ce5 빌드·등록 완료. 이미지 정적 파일 43개/8,386,667 bytes 전체 burunet 0.
+  - ✅ 임시 nginx 6경로 HTTP 200/CSP·해시 확인, public 39개 소스 해시 일치.
+  - ✅ 운영 main-0cd3ec5 generation/revision 15 유지(배포 안 함). 임시 컨테이너·이미지·파일 정리.
+  - 증거: docs/deployments/2026-09-30-branding-build.json, 연동 문서 §11-43.
+
 
 - [x] 2026-08-22 E17 netis-fms 장비 실물 사진을 3D 랙 장비 앞뒤면 텍스처로 적용
   - GLB 3종이 `섀시 + 앞면 사진 평면(*_PhotoFront, 로컬 +Z) + 뒷면 사진 평면(−Z)` 구조라 **재모델링 없이 런타임에 `map`·`emissiveMap` 교체**로 구현했다. 세션 초반 검토에서 확인한 그 구조가 그대로 쓰였다

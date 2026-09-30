@@ -1448,4 +1448,10 @@ FMS 배치(랙 소속·좌표·방향·시작U·점유U)는 유지하며 형상 
   branding 1회/refresh 1회, 인증 쿠키·헤더 미전송. CSP 위반·runtime exception 0.
   데스크톱·모바일 3D 헤더도 확인, 390px에서 scrollWidth 390.
   테스트 서버 15174/18777 및 Chrome 19222 종료·프로필 삭제. 운영 계정은 사용하지 않음.
-- 새 이미지 태그 및 실제 이미지 정적 파일 검증은 빌드 완료 후 기록한다.
+- 이미지 `10.1.20.21:5000/rack3d-web:main-b991ce5`, 소스 `b991ce56ddc664367b836e2f30d9a5299e88f164`.
+  registry digest `sha256:a8ba6a59b36fda6a0e3bb1b4b8e45ff9fba8f8887e3f7ccc8614e8870018ea0e`.
+- 실제 이미지 정적 43파일 / 8,386,667 bytes 전체 바이너리 포함 burunet 대소문자 무관 **0건**.
+  public 39개 원본 SHA256 일치. 임시 nginx의 접두사 유지/제거 포함 6경로 HTTP 200, CSP 및 파일 해시 확인.
+- 첫 임시 nginx HTTP 검사는 준비 전 connection reset(Errno 104). finally 정리 후 유한 readiness 확인을 추가해 재실행 성공.
+- 운영 `main-0cd3ec5`, generation/revision 15 전후 동일. deploy.sh/운영 변경 미수행.
+  임시 컨테이너·이미지·원격 파일 정리 완료. 증거: `docs/deployments/2026-09-30-branding-build.json`.
