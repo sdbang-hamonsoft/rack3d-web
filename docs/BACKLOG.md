@@ -4,6 +4,14 @@
 
 ## 할 일
 
+- [ ] 🛠 2026-09-30 고객사 브랜드명 연동 — 이미지 빌드 대기
+  - ✅ 기획: 공개 /api/auth/branding productName 사용, 실패 시 NETIS FMS 3D 관제. 하몬소프트 공급사 로고 유지.
+  - 인증 클라이언트와 분리한 credentials: omit 조회, 부팅 비차단·유한 timeout. 텍스트 변경으로 별도 디자인 단계 생략.
+  - ✅ 구현·리뷰 통과: 기본 HTML/title/meta/스플래시/세션 안내/로비/전산실 헤더 연동, 인증 처리와 독립.
+  - ✅ build/lint/Node 11개 검사 및 dist 바이너리 포함 burunet 잔존 0. 브라우저 10/10 및 데스크톱·모바일 3D 헤더 QA 통과.
+  - ✅ QA: branding 1회·refresh 1회, CSP 위반 0, 390px 가로 넘침 0. 테스트 서버/브라우저·프로필 정리.
+  - 커밋·푸시 후 buru-ext 이미지 빌드만 수행(운영 배포 제외).
+
 - [ ] 2026-09-11 배전반·지진감지·화재감지·출입태깅기
   - ✅ Google Sheets 4종 모델 제작, 원본 그림·Blender 스크립트·GLB 저장.
   - ✅ POWER/SEISMIC/FIRE 연결, MODEL_VERSION=16. 출입태깅기는 카탈로그 준비.

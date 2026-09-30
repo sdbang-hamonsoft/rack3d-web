@@ -968,3 +968,8 @@ kbd { font-size: 13px; }
 .scene-state.layout-unset strong { color: #d6e6f2; font: 700 12px/1.4 ui-monospace, monospace; letter-spacing: .08em; }
 .scene-state.layout-unset span { font-size: 10px; line-height: 1.6; }
 [data-theme="light"] .scene-state.layout-unset strong { color: #1f3547; }
+
+/* 고객사 브랜드명은 긴 한글/공백 없는 이름도 화면 폭 안에서 줄바꿈한다. */
+.splash-kicker, .scene-heading .eyebrow, .lobby-header h1, .lobby-footer > span { overflow-wrap: anywhere; line-height: 1.4; }
+.lobby-footer { gap: 16px; }
+.lobby-footer > span { min-width: 0; }

@@ -49,6 +49,7 @@ import {
   unmountedAssetCount,
 } from './rackFigures'
 import type { HeatmapDataset, HeatmapMode, RackHeatmapVisual, SeverityTone, ZoneAggregate } from './rackFigures'
+import { useBranding } from './hooks/useBranding'
 import './App.css'
 
 /**
@@ -1440,10 +1441,12 @@ function ThemeToggle({
 }
 
 function SplashScreen({
+  brandTitle,
   onComplete,
   theme,
   onToggleTheme,
 }: {
+  brandTitle: string
   onComplete: () => void
   theme: ThemeMode
   onToggleTheme: () => void
@@ -1480,7 +1483,7 @@ function SplashScreen({
           <i className="splash-axis splash-axis-z" />
         </div>
 
-        <p className="splash-kicker"><span>BURUNET</span> INFRASTRUCTURE PLATFORM</p>
+        <p className="splash-kicker"><span>{brandTitle}</span></p>
         <h1 id="splash-title">
           <span>3D RACK</span>
           VISUALIZATION
@@ -1516,6 +1519,7 @@ function SplashScreen({
  * 로딩·실패·빈 목록을 각각 구분해 보여준다 — 빈 화면을 정상으로 오인하지 않게(R7).
  */
 function DataCenterLobby({
+  brandTitle,
   zones,
   loading,
   failure,
@@ -1525,6 +1529,7 @@ function DataCenterLobby({
   theme,
   onToggleTheme,
 }: {
+  brandTitle: string
   zones: ZoneSummary[] | null
   loading: boolean
   failure: string | null
@@ -1559,7 +1564,7 @@ function DataCenterLobby({
         </div>
         <div className="lobby-brand-copy">
           <p className="lobby-brand-kicker">Hamonsoft</p>
-          <h1>Rack3D Visualization</h1>
+          <h1>{brandTitle}</h1>
         </div>
         <div className="lobby-system-status"><i /> {userName ? `${userName} 님` : 'NETIS-FMS'}</div>
         <ThemeToggle theme={theme} onToggle={onToggleTheme} className="lobby-theme-toggle" />
@@ -1632,7 +1637,7 @@ function DataCenterLobby({
       </section>
 
       <footer className="lobby-footer">
-        <span>BURUNET NOC PLATFORM</span>
+        <span>{brandTitle}</span>
         <span>SOURCE · NETIS-FMS</span>
       </footer>
     </main>
@@ -2391,10 +2396,12 @@ let bootstrapStarted = false
  * 인증은 FMS가 담당하고 rack3d는 넘기기만 한다.
  */
 function SessionNotice({
+  brandTitle,
   status,
   theme,
   onToggleTheme,
 }: {
+  brandTitle: string
   status: 'loading' | 'expired' | 'password-change'
   theme: ThemeMode
   onToggleTheme: () => void
@@ -2405,7 +2412,7 @@ function SessionNotice({
       <header className="lobby-header">
         <div className="lobby-brand-copy">
           <p className="lobby-brand-kicker">Hamonsoft</p>
-          <h1>Rack3D Visualization</h1>
+          <h1>{brandTitle}</h1>
         </div>
         <ThemeToggle theme={theme} onToggle={onToggleTheme} className="lobby-theme-toggle" />
       </header>
@@ -2486,7 +2493,9 @@ function preloadSceneAssets() {
 }
 
 function App() {
+  const brandTitle = useBranding()
   const [showSplash, setShowSplash] = useState(true)
+  const finishSplash = useCallback(() => setShowSplash(false), [])
   const [theme, setTheme] = useState<ThemeMode>(() => {
     try {
       const savedTheme = window.localStorage.getItem('rack3d-theme')
@@ -2770,16 +2779,17 @@ function App() {
   }
 
   if (showSplash) {
-    return <SplashScreen onComplete={() => setShowSplash(false)} theme={theme} onToggleTheme={toggleTheme} />
+    return <SplashScreen brandTitle={brandTitle} onComplete={finishSplash} theme={theme} onToggleTheme={toggleTheme} />
   }
 
   if (session.status !== 'ready') {
-    return <SessionNotice status={session.status} theme={theme} onToggleTheme={toggleTheme} />
+    return <SessionNotice brandTitle={brandTitle} status={session.status} theme={theme} onToggleTheme={toggleTheme} />
   }
 
   if (!selectedDataCenter) {
     return (
       <DataCenterLobby
+        brandTitle={brandTitle}
         zones={zonesResource.data}
         loading={zonesResource.loading}
         failure={zonesResource.failure?.message ?? null}
@@ -2804,7 +2814,7 @@ function App() {
           <span aria-hidden="true">←</span>
         </button>
         <div className="scene-heading">
-          <p className="eyebrow">BURUNET INFRASTRUCTURE</p>
+          <p className="eyebrow">{brandTitle}</p>
           <h1>{selectedDataCenter.name}</h1>
           <span>{selectedDataCenter.code ?? NO_VALUE} · 3D RACK VISUALIZATION</span>
         </div>

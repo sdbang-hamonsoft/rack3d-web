@@ -1429,3 +1429,23 @@ FMS 배치(랙 소속·좌표·방향·시작U·점유U)는 유지하며 형상 
 - 사용자가 요청한 정리 완료: Vite·스텁·테스트 Chrome 종료, 5174/8777/9222 리스너 없음.
 - 증거: `docs/deployments/2026-09-11-control-facilities.json`.
 - 되돌리기: `ssh buru-ext '~/cicd/rack3d/deploy.sh main-faf7f43'`.
+
+
+## 11-43. 고객사 설치 번들용 브랜딩 (2026-09-30)
+
+사용자가 netis-fms 요청의 구현·커밋·푸시·buru-ext 이미지 빌드를 직접 승인했다.
+이번 범위는 이미지 제공까지이며 운영 Deployment를 변경하지 않는다.
+
+- FMS 공개 `GET /api/auth/branding`의 래퍼 없는 `productName`을 사용한다.
+- 제목은 `<productName> 3D 관제`, 실패·미설정에는 `NETIS FMS 3D 관제`.
+- 인증 클라이언트/토큰/401 재시도와 분리하고, 브랜딩 조회가 화면 진입을 막지 않는다.
+- 기존 하몬소프트 공급사 로고는 유지한다. 고객 브랜드명이 HTML처럼 생겨도 텍스트로만 표시한다.
+- 페이지 기본 title/meta와 스플래시·로비·전산실 헤더의 사내 브랜드 표기를 교체한다.
+- 이번 이미지는 기존 main의 `ce4cb51` ACCESS 독립 렌더 준비도 포함한다.
+  FMS가 ACCESS 배치를 보내지 않으면 출입태깅기를 생성하지 않으며 GATE 표현은 유지한다.
+- 리뷰 통과, build/lint 및 Node 11개 통과. dist 바이너리 포함 case-insensitive burunet 0건.
+- dist + 운영 CSP 브라우저 10/10: 성공·기본명·401·404·비정상 JSON·빈값·3초 timeout·XSS형 텍스트·비로그인·20자 모바일.
+  branding 1회/refresh 1회, 인증 쿠키·헤더 미전송. CSP 위반·runtime exception 0.
+  데스크톱·모바일 3D 헤더도 확인, 390px에서 scrollWidth 390.
+  테스트 서버 15174/18777 및 Chrome 19222 종료·프로필 삭제. 운영 계정은 사용하지 않음.
+- 새 이미지 태그 및 실제 이미지 정적 파일 검증은 빌드 완료 후 기록한다.
