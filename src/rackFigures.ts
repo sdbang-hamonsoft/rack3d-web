@@ -53,13 +53,13 @@ export type HeatmapModeMeta = {
  */
 export const heatmapModeMeta: Record<HeatmapMode, HeatmapModeMeta> = {
   normal: { label: 'NORMAL VIEW', shortLabel: 'NORMAL', description: '기본 보기', symbol: '◇', available: true },
-  temperature: { label: 'TEMPERATURE', shortLabel: 'TEMP', description: '랙 TH 센서 온도 (FMS)', symbol: 'T', available: true },
-  power: { label: 'POWER DRAW', shortLabel: 'POWER', description: '랙 DPM 전력 합 (FMS)', symbol: 'P', available: true },
-  traffic: { label: 'NETWORK TRAFFIC', shortLabel: 'TRAFFIC', description: '장비 트래픽 — FMS 미수집', symbol: 'N', available: false },
-  occupancy: { label: 'U OCCUPANCY', shortLabel: 'CAPACITY', description: '랙 U 점유율 (FMS)', symbol: 'U', available: true },
+  temperature: { label: 'TEMPERATURE', shortLabel: 'TEMP', description: '랙 TH 센서 온도', symbol: 'T', available: true },
+  power: { label: 'POWER DRAW', shortLabel: 'POWER', description: '랙 DPM 전력 합', symbol: 'P', available: true },
+  traffic: { label: 'NETWORK TRAFFIC', shortLabel: 'TRAFFIC', description: '장비 트래픽 — 수집하지 않음', symbol: 'N', available: false },
+  occupancy: { label: 'U OCCUPANCY', shortLabel: 'CAPACITY', description: '랙 U 점유율', symbol: 'U', available: true },
   // u맵이 붙어 장비 목록은 생겼지만 **장비 단위 장애 소스는 여전히 없다**(FMS 티켓 미연동 +
   // IT 장비 텔레메트리 미수집). 목록이 생겼다고 "장애 0건"으로 켜면 가짜 정상이 된다.
-  incidents: { label: 'INCIDENT DENSITY', shortLabel: 'ALERTS', description: '장비 단위 장애 — FMS 티켓 미연동', symbol: '!', available: false },
+  incidents: { label: 'INCIDENT DENSITY', shortLabel: 'ALERTS', description: '장비 단위 장애 — 미제공', symbol: '!', available: false },
 }
 
 export const heatmapModes = Object.keys(heatmapModeMeta) as HeatmapMode[]

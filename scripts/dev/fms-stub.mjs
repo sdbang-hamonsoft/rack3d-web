@@ -22,6 +22,9 @@ import { join } from 'node:path'
 
 const PORT = Number(process.env.PORT ?? 8777)
 const SCENARIO = process.env.SCENARIO ?? 'ok'
+// PRODUCT_NAME  공개 브랜드 `/api/auth/branding` 의 productName. 비우면 404 → rack3d 기본값(NETIS FMS).
+//               화면의 출처 표기가 내부 식별자가 아니라 이 값을 따라가는지 확인한다(E27 Q4).
+const PRODUCT_NAME = process.env.PRODUCT_NAME ?? ''
 // ok           정상
 // 429          racks가 계속 429 + Retry-After: 45 → 백오프 주기 확인
 // 429-once     첫 racks만 429 + Retry-After: 86400 → 상한(300s) 클램프·수동 복구 확인
@@ -254,6 +257,12 @@ createServer((req, res) => {
     res.end(JSON.stringify(body))
   }
 
+  // 공개 엔드포인트 — FMS 와 같이 인증 없이 응답한다(rack3d 는 쿠키·토큰 없이 부른다).
+  if (req.url === '/api/auth/branding') {
+    return PRODUCT_NAME
+      ? json(200, { productName: PRODUCT_NAME })
+      : json(404, { code: 'NOT_FOUND', message: '없음' })
+  }
   if (req.url === '/api/auth/refresh' && req.method === 'POST') {
     // TOKEN_TTL로 액세스 토큰 수명을 줄여 **선제 갱신(①)을 분 단위가 아니라 초 단위로 관측**한다.
     // 기본값은 FMS 실측치(900초)와 같다.

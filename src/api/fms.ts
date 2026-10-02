@@ -199,8 +199,8 @@ export function describeFailure(error: unknown): ApiFailure {
   if (error.code === 'INVALID_ZONE_ID') return plain('unknown', '조회할 전산실을 확인하지 못했습니다.')
   if (error.status === NETWORK_ERROR_STATUS) {
     return error.code === 'TIMEOUT'
-      ? plain('network', 'netis-fms 응답이 없어 요청을 중단했습니다.')
-      : plain('network', 'netis-fms에 연결하지 못했습니다. 네트워크 상태를 확인하세요.')
+      ? plain('network', '서버 응답이 없어 요청을 중단했습니다.')
+      : plain('network', '서버에 연결하지 못했습니다. 네트워크 상태를 확인하세요.')
   }
   if (error.status === 403 || error.status === 404) {
     return plain('forbidden', '이 전산실을 볼 권한이 없거나 조회 범위에 포함되어 있지 않습니다.')

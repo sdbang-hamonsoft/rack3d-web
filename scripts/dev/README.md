@@ -38,6 +38,10 @@ VITE_FMS_ORIGIN=http://localhost:8777 npm run dev              # rack3d를 스�
 | `photo-fail` | 사진 바이트 500 — 실패 쿨다운이 걸리는지, 같은 면을 무한 재요청하지 않는지 |
 | `photo-hang` | 사진 무응답 — 동시 4건 슬롯이 막힌 채 남지 않는지 |
 
+`PRODUCT_NAME=<이름>`으로 공개 브랜드(`/api/auth/branding`)의 `productName`을 준다(예: `PRODUCT_NAME='고객 관제'`).
+비우면 404 라 rack3d 는 기본값 `NETIS FMS`를 쓴다. **화면의 출처 표기가 내부 식별자(`netis-fms`)가 아니라
+이 값을 따라가는지** 확인하는 용도다(2026-10-02, E27 Q4).
+
 `EXTRA_RACKS=<n>`으로 합성 랙을 덧붙인다(예: `EXTRA_RACKS=31` → 총 36대).
 **랙 수가 많을 때만 드러나는 것**(3D 렌더 비용, 폴링 중 카메라 조작, 배치 응답 크기)을
 재현하는 용도다 — UAT 실데이터는 랙이 2대뿐이라 이 경로가 안 보인다.

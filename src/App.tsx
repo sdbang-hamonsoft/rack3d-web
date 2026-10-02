@@ -49,7 +49,7 @@ import {
   unmountedAssetCount,
 } from './rackFigures'
 import type { HeatmapDataset, HeatmapMode, RackHeatmapVisual, SeverityTone, ZoneAggregate } from './rackFigures'
-import { useBranding } from './hooks/useBranding'
+import { useBranding, useProductName } from './hooks/useBranding'
 import './App.css'
 
 /**
@@ -257,12 +257,12 @@ function formatUnitRange(server: ServerData) {
  * 상시 틀리는 경로가 생긴다(C6·C7). 적용 여부까지 말하려면 `useAssetPhoto`의 성공 여부를
  * 자산별 상태로 올려 여기서 읽어야 한다 — 지금은 그 연결이 없으므로 등록 사실만 말한다.
  */
-function serverPhotoNote(server: ServerData): string {
-  if (server.hasFront && server.hasRear) return ' 앞뒤면 실물 사진이 netis-fms에 등록되어 있습니다 — 3D에는 가까이서 볼 때 반영되고, 반영 전 그림은 이 자산의 사진이 아닙니다.'
-  if (server.hasFront) return ' 앞면 실물 사진만 netis-fms에 등록되어 있습니다 — 3D 앞면에 가까이서 볼 때 반영되고, 반영 전 앞면과 뒷면 그림은 이 자산의 사진이 아닙니다.'
-  if (server.hasRear) return ' 뒷면 실물 사진만 netis-fms에 등록되어 있습니다 — 3D 뒷면에 가까이서 볼 때 반영되고, 반영 전 뒷면과 앞면 그림은 이 자산의 사진이 아닙니다.'
+function serverPhotoNote(server: ServerData, productName: string): string {
+  if (server.hasFront && server.hasRear) return ` 앞뒤면 실물 사진이 ${productName}에 등록되어 있습니다 — 3D에는 가까이서 볼 때 반영되고, 반영 전 그림은 이 자산의 사진이 아닙니다.`
+  if (server.hasFront) return ` 앞면 실물 사진만 ${productName}에 등록되어 있습니다 — 3D 앞면에 가까이서 볼 때 반영되고, 반영 전 앞면과 뒷면 그림은 이 자산의 사진이 아닙니다.`
+  if (server.hasRear) return ` 뒷면 실물 사진만 ${productName}에 등록되어 있습니다 — 3D 뒷면에 가까이서 볼 때 반영되고, 반영 전 뒷면과 앞면 그림은 이 자산의 사진이 아닙니다.`
   if (isStandardModel(server.model)) return ' 실물 사진이 없어 제조사 표시 없는 표준 3D 형상을 사용합니다.'
-  return ' 앞뒤면 그림은 형상 모델에 구워진 기본 이미지입니다 — netis-fms에 이 자산의 실물 사진이 없습니다.'
+  return ` 앞뒤면 그림은 형상 모델에 구워진 기본 이미지입니다 — ${productName}에 이 자산의 실물 사진이 없습니다.`
 }
 
 /** 값이 없는 텍스트 필드는 지어내지 않고 `—`로 둔다(C6·C7). */
@@ -1539,6 +1539,7 @@ function DataCenterLobby({
   theme: ThemeMode
   onToggleTheme: () => void
 }) {
+  const productName = useProductName()
   const facilities = zones ?? []
   const totalRacks = facilities.reduce((total, zone) => total + zone.rackCount, 0)
   // ASSET READ가 없으면 자산 수 자체가 응답에서 빠진다 — 그때는 합계도 `—`로 둔다(C6).
@@ -1566,7 +1567,7 @@ function DataCenterLobby({
           <p className="lobby-brand-kicker">Hamonsoft</p>
           <h1>{brandTitle}</h1>
         </div>
-        <div className="lobby-system-status"><i /> {userName ? `${userName} 님` : 'NETIS-FMS'}</div>
+        <div className="lobby-system-status"><i /> {userName ? `${userName} 님` : productName}</div>
         <ThemeToggle theme={theme} onToggle={onToggleTheme} className="lobby-theme-toggle" />
       </header>
 
@@ -1593,7 +1594,7 @@ function DataCenterLobby({
         </div>
 
         {loading && !zones ? (
-          <p className="lobby-state">netis-fms에서 전산실 목록을 불러오는 중…</p>
+          <p className="lobby-state">{productName}에서 전산실 목록을 불러오는 중…</p>
         ) : failure ? (
           <div className="lobby-state error" role="alert">
             <p>{failure}</p>
@@ -1601,7 +1602,7 @@ function DataCenterLobby({
           </div>
         ) : facilities.length === 0 ? (
           <p className="lobby-state" role="status">
-            조회할 수 있는 전산실이 없습니다. netis-fms에서 위치 조회 범위를 확인하세요.
+            조회할 수 있는 전산실이 없습니다. {productName}에서 위치 조회 범위를 확인하세요.
           </p>
         ) : (
           <div className="facility-list">
@@ -1638,7 +1639,7 @@ function DataCenterLobby({
 
       <footer className="lobby-footer">
         <span>{brandTitle}</span>
-        <span>SOURCE · NETIS-FMS</span>
+        <span>데이터: {productName}</span>
       </footer>
     </main>
   )
@@ -1662,11 +1663,12 @@ function ServerDetailPanel({
   onBackToRack: () => void
   onOverview: () => void
 }) {
+  const productName = useProductName()
   return (
     <>
       <div className="server-panel-toolbar">
         <button type="button" onClick={onBackToRack}><span aria-hidden="true">←</span> RACK {rack.label}</button>
-        <span><i /> NETIS-FMS</span>
+        <span><i /> {productName}</span>
       </div>
 
       <p className="panel-title">ASSET DETAIL</p>
@@ -1679,7 +1681,7 @@ function ServerDetailPanel({
           `lifecycleStatus`는 자산 원장의 생애주기(OPERATION 등)다. **건강 상태가 아니므로**
           초록/빨강으로 칠하지 않고 중립 배지로 원값을 그대로 보여준다.
         */}
-        <span className="server-state neutral" title="자산 생애주기 상태 (netis-fms)"><i />{orDash(server.lifecycleStatus)}</span>
+        <span className="server-state neutral" title="자산 생애주기 상태"><i />{orDash(server.lifecycleStatus)}</span>
       </div>
       <span className="server-model-name">{orDash(server.category)}</span>
 
@@ -1690,7 +1692,7 @@ function ServerDetailPanel({
       </section>
 
       <section className="server-system-info">
-        <div className="server-section-heading"><span>ASSET REGISTER</span><small>NETIS-FMS</small></div>
+        <div className="server-section-heading"><span>ASSET REGISTER</span><small>{productName}</small></div>
         <dl>
           <div><dt>CATEGORY</dt><dd>{orDash(server.category)}</dd></div>
           <div><dt>MANUFACTURER</dt><dd>{orDash(server.manufacturer)}</dd></div>
@@ -1701,14 +1703,14 @@ function ServerDetailPanel({
           <div><dt>MONITORING</dt><dd>{orDash(server.monitoringType)}</dd></div>
         </dl>
         <p className="rack-source-note">
-          값이 비어 있는 항목은 netis-fms 자산 원장에 등록되지 않은 것입니다.
+          값이 비어 있는 항목은 {productName} 자산 원장에 등록되지 않은 것입니다.
         </p>
       </section>
 
       <section className="server-telemetry">
-        <div className="server-section-heading"><span>LIVE TELEMETRY</span><small>미연동</small></div>
+        <div className="server-section-heading"><span>LIVE TELEMETRY</span><small>미제공</small></div>
         <p className="rack-source-note">
-          CPU·메모리·온도·트래픽 등 장비 단위 실시간 지표는 netis-fms가 수집하지 않습니다.
+          CPU·메모리·온도·트래픽 등 장비 단위 실시간 지표는 {productName}에서 수집하지 않습니다.
           랙 단위 온·습도·전력은 랙 상세에서 확인하세요.
         </p>
       </section>
@@ -1718,7 +1720,7 @@ function ServerDetailPanel({
         <p className="rack-source-note">
           {serverModelLabel(server.model)} 형상을 {server.units}U 높이에 맞춰 표시합니다.
           실제 제조사·모델명은 위 ASSET REGISTER 값입니다.
-          {serverPhotoNote(server)}
+          {serverPhotoNote(server, productName)}
         </p>
       </section>
 
@@ -1959,6 +1961,7 @@ function IncidentNavigator({
   onPrevious: () => void
   onNext: () => void
 }) {
+  const productName = useProductName()
   const current = currentIndex >= 0 ? alerts[currentIndex] : alerts[0]
   const tone = current ? severityTones[current.facts.severity] : 'normal'
 
@@ -1975,7 +1978,7 @@ function IncidentNavigator({
         onClick={onToggle}
         aria-pressed={active}
         disabled={alerts.length === 0}
-        title="netis-fms 판정이 정상이 아닌 랙을 차례로 확인합니다"
+        title={`${productName} 판정이 정상이 아닌 랙을 차례로 확인합니다`}
       >
         <span className="incident-mode-icon" aria-hidden="true">!</span>
         <span><small>ALERT RACKS</small><strong>{active ? 'ALERT MODE ACTIVE' : '경보 랙 탐색'}</strong></span>
@@ -2052,7 +2055,7 @@ function HeatmapControl({
               >
                 <i aria-hidden="true">{optionMeta.symbol}</i>
                 <span><strong>{optionMeta.label}</strong><small>{optionMeta.description}</small></span>
-                <em>{optionMeta.available ? (mode === option ? 'ACTIVE' : 'SELECT') : '미연동'}</em>
+                <em>{optionMeta.available ? (mode === option ? 'ACTIVE' : 'SELECT') : '사용 불가'}</em>
               </button>
             )
           })}
@@ -2106,6 +2109,7 @@ function DataCenterDashboard({
   alertRacks: RackAlertEntry[]
   activeAlertRackId: string | null
 }) {
+  const productName = useProductName()
   /** 장비 구성은 `categoryCounts`(랙 내 전체 자산)에서 낸다 — 많은 쪽이 전체 모집단이다. */
   const categoryRows = useMemo(() => {
     const totals = zone?.categoryTotals ?? {}
@@ -2130,7 +2134,7 @@ function DataCenterDashboard({
               <h2>{dataCenter.name} Dashboard</h2>
             </div>
             <div className="dashboard-freshness">
-              <i /> NETIS-FMS
+              <i /> {productName}
               <span>{lastUpdatedAt ? `갱신 ${lastUpdatedAt.toLocaleTimeString('ko-KR')}` : '갱신 대기'}</span>
             </div>
           </header>
@@ -2194,7 +2198,7 @@ function DataCenterDashboard({
             <article className="dashboard-card temperature-history-card">
               <div className="dashboard-card-heading">
                 <div><span>ENVIRONMENT · LAST 24H</span><h3>Temperature trend</h3></div>
-                <small>미연동 · E19 B4</small>
+                <small>연동 준비 중</small>
               </div>
               {/*
                 `role="status"`(aria-live)가 아니라 `note`다 — 내용이 영구 정적이라
@@ -2203,8 +2207,7 @@ function DataCenterDashboard({
               */}
               <div className="chart-placeholder" role="note">
                 <strong>{NO_VALUE}</strong>
-                <p>전산실 온습도 시계열은 아직 netis-fms와 연동되지 않았습니다.</p>
-                <small>GET /api/performance/series/zone (E19 B4)</small>
+                <p>전산실 온습도 추이는 연동 준비 중입니다.</p>
               </div>
             </article>
 
@@ -2212,7 +2215,7 @@ function DataCenterDashboard({
               <article className="dashboard-card capacity-chart-card">
                 <div className="dashboard-card-heading">
                   <div><span>CAPACITY</span><h3>Rack utilization</h3></div>
-                  <small>USED / RACK U · NETIS-FMS</small>
+                  <small>USED / RACK U · {productName}</small>
                 </div>
                 <div className="rack-bars">
                   {racks.map((rack) => {
@@ -2240,7 +2243,7 @@ function DataCenterDashboard({
                   <div><span>HEALTH</span><h3>Server status</h3></div>
                 </div>
                 <p className="rack-source-note">
-                  장비 단위 상태는 netis-fms가 수집하지 않습니다(IT 장비 텔레메트리 미도입).
+                  장비 단위 상태는 {productName}에서 수집하지 않습니다(IT 장비 텔레메트리 미도입).
                 </p>
               </article>
 
@@ -2252,7 +2255,7 @@ function DataCenterDashboard({
               <article className="dashboard-card model-chart-card">
                 <div className="dashboard-card-heading">
                   <div><span>ASSET MIX</span><h3>Category</h3></div>
-                  <small>랙 내 자산 · NETIS-FMS</small>
+                  <small>랙 내 자산 · {productName}</small>
                 </div>
                 {categoryRows.length === 0 ? (
                   <p className="rack-source-note">
@@ -2304,9 +2307,9 @@ function DataCenterDashboard({
                 {alertRacks.length === 0 && (
                   <div className="incident-empty">
                     {zone
-                      ? 'netis-fms 판정이 정상이 아닌 랙이 없습니다.'
+                      ? `${productName} 판정이 정상이 아닌 랙이 없습니다.`
                       : '랙 집계를 기다리는 중입니다.'}
-                    {' '}장비 단위 장애 목록(담당자·조치 상태)은 FMS 티켓 연동 후 표시됩니다 (GET /api/tickets).
+                    {' '}장비 단위 장애 목록(담당자·조치 상태)은 연동 준비 중입니다.
                   </div>
                 )}
               </div>
@@ -2406,6 +2409,7 @@ function SessionNotice({
   theme: ThemeMode
   onToggleTheme: () => void
 }) {
+  const productName = useProductName()
   return (
     <main className="lobby-shell" data-theme={theme}>
       <div className="lobby-glow lobby-glow-one" />
@@ -2422,25 +2426,25 @@ function SessionNotice({
             <>
               <p className="section-index">SESSION</p>
               <h2>세션을 확인하는 중입니다…</h2>
-              <p>netis-fms 로그인 상태를 복원하고 있습니다.</p>
+              <p>{productName} 로그인 상태를 복원하고 있습니다.</p>
             </>
           ) : status === 'password-change' ? (
             <>
               {/* C4 — 비밀번호 변경은 rack3d가 처리하지 않는다. FMS 화면으로 넘긴다. */}
               <p className="section-index">PASSWORD CHANGE REQUIRED</p>
               <h2>비밀번호를 변경해야 합니다</h2>
-              <p>netis-fms에서 비밀번호를 변경한 뒤 다시 접속하세요.</p>
+              <p>{productName}에서 비밀번호를 변경한 뒤 다시 접속하세요.</p>
               <button className="overview-button" type="button" onClick={goToFmsPasswordChange}>
-                netis-fms 비밀번호 변경으로 이동
+                {productName} 비밀번호 변경으로 이동
               </button>
             </>
           ) : (
             <>
               <p className="section-index">SESSION EXPIRED</p>
               <h2>세션이 만료되었습니다</h2>
-              <p>netis-fms에 로그인한 뒤 다시 접속하세요.</p>
+              <p>{productName}에 로그인한 뒤 다시 접속하세요.</p>
               <button className="overview-button" type="button" onClick={goToFmsLogin}>
-                netis-fms 로그인으로 이동
+                {productName} 로그인으로 이동
               </button>
             </>
           )}
@@ -2494,6 +2498,7 @@ function preloadSceneAssets() {
 
 function App() {
   const brandTitle = useBranding()
+  const productName = useProductName()
   const [showSplash, setShowSplash] = useState(true)
   const finishSplash = useCallback(() => setShowSplash(false), [])
   const [theme, setTheme] = useState<ThemeMode>(() => {
@@ -2666,7 +2671,7 @@ function App() {
         detail: time ? `${racksResource.failure.message} · 마지막 갱신 ${time}` : racksResource.failure.message,
       }
     }
-    if (!at) return { tone: 'stale', label: '연결 중', detail: 'netis-fms 응답 대기 중' }
+    if (!at) return { tone: 'stale', label: '연결 중', detail: `${productName} 응답 대기 중` }
     // 텔레메트리는 최신인데 구조(u맵)만 못 받은 경우도 LIVE라고 단언하지 않는다 —
     // 화면의 장비 목록·U 배치가 실제와 다를 수 있다는 사실은 알려야 한다.
     if (uMapResource.failure || layoutResource.failure) {
@@ -2833,7 +2838,7 @@ function App() {
           className="theme-toggle refresh-button"
           onRetry={refreshFromFms}
           busy={racksResource.loading || uMapResource.loading}
-          kicker="NETIS-FMS"
+          kicker={productName}
           icon={(
             <svg viewBox="0 0 24 24">
               <path d="M20 12a8 8 0 1 1-2.34-5.66" />
@@ -2947,7 +2952,7 @@ function App() {
             */
             <div className="scene-state layout-unset" role="status">
               <strong>3D 배치가 설정되지 않았습니다</strong>
-              <span>netis-fms 환경설정 &gt; 레이아웃 설정에서 이 전산실의 배치를 지정하세요.</span>
+              <span>{productName} 환경설정 &gt; 레이아웃 설정에서 이 전산실의 배치를 지정하세요.</span>
               <small>배치를 지정한 뒤 상단 "지금 새로고침"을 누르면 반영됩니다.</small>
             </div>
           ) : zoneRacks && zoneRacks.length === 0 && sceneObjects.length === 0 ? (
@@ -2963,7 +2968,7 @@ function App() {
                 {unplacedRacks.slice(0, 4).map((rack) => rack.label).join(' · ')}
                 {unplacedRacks.length > 4 ? ` 외 ${unplacedRacks.length - 4}대` : ''}
               </span>
-              <small>netis-fms 레이아웃 설정에서 배치하면 3D에 표시됩니다. 목록·검색·경보에는 그대로 있습니다.</small>
+              <small>{productName} 레이아웃 설정에서 배치하면 3D에 표시됩니다. 목록·검색·경보에는 그대로 있습니다.</small>
             </div>
           ) : null}
         </div>
@@ -3020,7 +3025,7 @@ function App() {
               */}
               {!focusedRack.placement && (
                 <p className="rack-source-note warn">
-                  ⚠ netis-fms 3D 배치에 이 랙이 없어 씬에 표시되지 않습니다. 레이아웃 설정에서 배치하세요.
+                  ⚠ {productName} 3D 배치에 이 랙이 없어 씬에 표시되지 않습니다. 레이아웃 설정에서 배치하세요.
                 </p>
               )}
 
@@ -3039,7 +3044,7 @@ function App() {
                   </strong>
                 </div>
                 {focusedRackOccupancy === null ? (
-                  <p className="rack-source-note">netis-fms에 랙 크기(U)가 설정되어 있지 않아 점유율을 낼 수 없습니다.</p>
+                  <p className="rack-source-note">{productName}에 랙 크기(U)가 설정되어 있지 않아 점유율을 낼 수 없습니다.</p>
                 ) : (
                   <>
                     <div className="capacity-track">
@@ -3062,11 +3067,11 @@ function App() {
                 라벨을 나누고 아래 캡션에서 차이를 밝힌다.
               */}
               <div className="rack-stat-grid">
-                <div title="U가 배정되어 랙에 장착된 자산 수 (netis-fms assetCount)">
+                <div title="U가 배정되어 랙에 장착된 자산 수">
                   <span>MOUNTED</span>
                   <strong>{focusedRackFacts ? focusedRackFacts.assetCount : NO_VALUE}<small> 대</small></strong>
                 </div>
-                <div title="U 미배정(문짝 센서·PDU 등)을 포함한 랙 내 활성 자산 전체 (netis-fms categoryCounts)">
+                <div title="U 미배정(문짝 센서·PDU 등)을 포함한 랙 내 활성 자산 전체">
                   <span>IN RACK</span>
                   <strong>{focusedRackAssetCount ?? NO_VALUE}<small> 대</small></strong>
                 </div>
@@ -3099,7 +3104,7 @@ function App() {
                 **0으로 치환하지 않고 `—`로 표시한다.** 관제 화면에서 가짜 0은 사고다(C6).
               */}
               <section className="rack-environment">
-                <p className="rack-subtitle">ENVIRONMENT · NETIS-FMS</p>
+                <p className="rack-subtitle">ENVIRONMENT · {productName}</p>
                 <div className="rack-stat-grid">
                   <div>
                     <span>TEMP</span>
@@ -3157,7 +3162,7 @@ function App() {
                   </p>
                 )}
                 <p className="rack-source-note">
-                  장비 단위 상태(정상·경고·장애)는 netis-fms가 수집하지 않습니다(IT 장비 텔레메트리 미도입).
+                  장비 단위 상태(정상·경고·장애)는 {productName}에서 수집하지 않습니다(IT 장비 텔레메트리 미도입).
                 </p>
               </section>
 
@@ -3243,7 +3248,7 @@ function App() {
                   <section className="rack-health">
                     <p className="rack-subtitle">U MAP</p>
                     <p className="rack-source-note">
-                      netis-fms에 랙 크기(U)가 설정되어 있지 않아 U 배치도를 그리지 않습니다.
+                      {productName}에 랙 크기(U)가 설정되어 있지 않아 U 배치도를 그리지 않습니다.
                     </p>
                   </section>
                 )}
