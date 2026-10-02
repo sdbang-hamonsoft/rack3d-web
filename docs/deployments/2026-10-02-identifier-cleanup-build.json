@@ -1,0 +1,41 @@
+{
+  "purpose": "3D 화면 내부 식별자 정리 (netis-fms 요청 2, E27 Q4) — 빌드만, 운영 배포 안 함",
+  "image": "10.1.20.21:5000/rack3d-web:main-188c9b1",
+  "commit": "188c9b1e3e8ac30e285071cd69772c314ff6b626",
+  "built_commit_verified_on_server": true,
+  "build_route": "build.yml 직접 호출(공개 URL, GIT_TERMINAL_PROMPT=0) — build.sh 가 토큰을 대화형으로 물어서",
+  "ansible": { "ok": 10, "changed": 7, "failed": 0 },
+  "latest_build_tag": "main-188c9b1",
+  "registry": {
+    "status": 200,
+    "digest": "sha256:790013dfe7b2fdd211db534b11908bf942fcef8ac604c00456127c05b9aeef23",
+    "manifest_bytes": 2616,
+    "latest_tag_now_points_here": true
+  },
+  "static_scan": {
+    "files": 43,
+    "bytes": 8386561,
+    "bundle": { "path": "assets/index-CiWSZAt-.js", "bytes": 1309594, "sha256": "873d10b0ce6b6046ce7d3aa96ead2e8ecb43610ddd0a11db5a96d317d4f4032d" },
+    "public_files_matching_git": "39/39",
+    "string_counts_in_bundle": {
+      "데이터: ": 1,
+      "연동 준비 중": 3,
+      "SOURCE · NETIS-FMS": 0,
+      "E19 B4": 0,
+      "GET /api/performance": 0,
+      "GET /api/tickets": 0
+    }
+  },
+  "production_unchanged": {
+    "image": "10.1.20.21:5000/rack3d-web:main-0cd3ec5",
+    "generation": 15,
+    "observed_generation": 15,
+    "revision": 15,
+    "pod": "rack3d-web-57cd97558f-nrx5f",
+    "restarts": 0
+  },
+  "risks": [
+    "deploy.sh 를 인자 없이 실행하면 .latest_build_tag(main-188c9b1)가 운영에 나간다",
+    "latest 태그가 이 이미지를 가리킨다. 운영 Deployment 는 main-0cd3ec5 로 고정이라 현재 경로는 없음"
+  ]
+}

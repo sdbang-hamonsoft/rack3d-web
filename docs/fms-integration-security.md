@@ -1455,3 +1455,44 @@ FMS 배치(랙 소속·좌표·방향·시작U·점유U)는 유지하며 형상 
 - 첫 임시 nginx HTTP 검사는 준비 전 connection reset(Errno 104). finally 정리 후 유한 readiness 확인을 추가해 재실행 성공.
 - 운영 `main-0cd3ec5`, generation/revision 15 전후 동일. deploy.sh/운영 변경 미수행.
   임시 컨테이너·이미지·원격 파일 정리 완료. 증거: `docs/deployments/2026-09-30-branding-build.json`.
+
+## 11-44. 3D 화면 내부 식별자 정리 — 이미지 빌드만 `main-188c9b1` (2026-10-02)
+
+netis-fms 요청 2(사용자 결정 E27 Q4): FMS 사용자 매뉴얼에 3D 관제 화면을 캡처해 넣는데 내부 식별자가 보였다.
+**운영 배포는 netis-fms 판단이라 rack3d 는 이미지 빌드까지만 했다.**
+
+| 항목 | 값 |
+|---|---|
+| 이미지 | `10.1.20.21:5000/rack3d-web:main-188c9b1` |
+| digest | `sha256:790013dfe7b2fdd211db534b11908bf942fcef8ac604c00456127c05b9aeef23` |
+| 빌드 커밋 | `188c9b1e3e8ac30e285071cd69772c314ff6b626` (buru-ext 빌드 캐시에서 실측) |
+| 운영 | `main-0cd3ec5`, generation/revision 15 — **빌드 전후 동일** |
+
+바뀐 화면 문구:
+
+| 자리 | 이전 | 이후 |
+|---|---|---|
+| 로비 빈 화면 | `netis-fms에서 위치 조회 범위를 확인하세요` | `<제품명>에서 위치 조회 범위를 확인하세요` |
+| 로비 하단 | `SOURCE · NETIS-FMS` | `데이터: <제품명>` |
+| 출처 배지 전반(상단 새로고침·자산 패널·대시보드·랙 환경) | `NETIS-FMS` | `<제품명>` |
+| 본문 문장 전반(로딩·세션 안내·배치 안내·랙 크기 미설정·사진 등록 안내) | `netis-fms…` | `<제품명>…` |
+| 대시보드 온습도 추이 배지 | `미연동 · E19 B4` | `연동 준비 중` |
+| 대시보드 온습도 추이 본문 | `…아직 netis-fms와 연동되지 않았습니다` + `GET /api/performance/series/zone (E19 B4)` | `전산실 온습도 추이는 연동 준비 중입니다.` (API 경로 줄 삭제) |
+| 대시보드 장애 목록 | `…FMS 티켓 연동 후 표시됩니다 (GET /api/tickets)` | `…연동 준비 중입니다.` |
+| 자산 패널 LIVE TELEMETRY 배지 | `미연동` | `미제공` |
+| 히트맵 비활성 모드 배지 | `미연동` | `사용 불가` |
+| 히트맵 설명 | `(FMS)`·`FMS 미수집`·`FMS 티켓 미연동` | 출처 괄호 삭제·`수집하지 않음`·`미제공` |
+| 툴팁 | `(netis-fms assetCount)`·`(netis-fms categoryCounts)`·`(netis-fms)` | 괄호 삭제 |
+| 통신 오류 | `netis-fms 응답이 없어…`·`netis-fms에 연결하지 못했습니다…` | `서버 응답이 없어…`·`서버에 연결하지 못했습니다…` |
+
+`<제품명>` 은 공개 `/api/auth/branding` 의 `productName`, 실패·미설정이면 `NETIS FMS`. 하몬소프트 로고는 유지.
+
+⚠️ **«미연동»을 일괄 «연동 준비 중»으로 바꾸지 않았다.** 계획이 있는 것(온습도 추이·장애 티켓 목록)만 «연동 준비 중»이고,
+FMS 가 수집하지 않아 계획이 없는 것(장비 실시간 지표·트래픽·장비 단위 장애 밀도)은 «미제공»/«수집하지 않음»이다.
+계획 없는 것을 "준비 중"이라 쓰면 매뉴얼을 본 고객에게 거짓 약속이 된다. 계획이 바뀌면 알려 달라.
+
+⚠️ `.latest_build_tag` 가 `main-188c9b1` 로 바뀌었다 — **인자 없이 `deploy.sh` 를 돌리면 이 이미지가 운영에 나간다.**
+`latest` 태그도 이 이미지를 가리키지만 운영 Deployment 는 `main-0cd3ec5` 로 고정이라 현재 그 경로로 나갈 일은 없다.
+
+검증: 이미지 번들에서 `데이터: ` 1·`연동 준비 중` 3, `SOURCE · NETIS-FMS`·`E19 B4`·`GET /api/performance`·`GET /api/tickets` 0.
+public 39개 git 해시 일치. 증거: `docs/deployments/2026-10-02-identifier-cleanup-build.json`.

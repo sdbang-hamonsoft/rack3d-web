@@ -4,18 +4,6 @@
 
 ## 할 일
 
-- [ ] 🛠 2026-10-02 3D 화면 내부 식별자 정리 — FMS 매뉴얼 캡처용 (netis-fms 요청 2, 사용자 결정 E27 Q4)
-  - ✅ 출처 표기 `netis-fms`·`NETIS-FMS` → 공개 브랜드 `productName`(기본 `NETIS FMS`). 로비 하단 `SOURCE · NETIS-FMS` → `데이터: <제품명>`.
-  - ✅ 에픽 번호·API 경로·필드명 노출 제거(`미연동 · E19 B4`, `GET /api/performance/series/zone`, `GET /api/tickets`, `assetCount`·`categoryCounts`).
-  - ⚖ «미연동»을 일괄 «연동 준비 중»으로 바꾸지 않았다 — **계획이 있는 것만** «연동 준비 중»(온습도 추이·장애 티켓 목록),
-    FMS 가 수집하지 않는 것은 «미제공»/«수집하지 않음»(장비 실시간 지표·트래픽·장비 단위 장애 밀도), 비활성 히트맵 배지는 «사용 불가».
-    계획 없는 것을 "준비 중"이라 쓰면 매뉴얼을 본 고객에게 거짓 약속이 된다(리뷰 🟡 반영으로 장애 밀도도 «미제공»).
-  - ✅ 제품명은 `BrandingProvider`(컨텍스트)로 한 번 받아 내린다. 받침 의존 조사(이/가·은/는·과/와·을/를)를 제품명 뒤에 붙이지 않는다.
-  - ✅ 하몬소프트 로고 유지. API 계층 오류 문구는 «서버»로 중립화.
-  - ✅ tsc·eslint·Node 테스트 11건·build 통과. 리뷰 🟢(🔴 0). 스텁 `PRODUCT_NAME` 으로 로비·씬·대시보드·랙·자산·히트맵 실화면 잔여 식별자 0 확인,
-    17자 제품명에서도 레이아웃 넘침 없음. 캡처: `/Volumes/ext-ssd/build-artifacts/rack3d/e27-q4/`
-  - ⬜ buru-ext 이미지 빌드만(운영 배포는 netis-fms 판단)
-
 
 - [ ] 2026-09-11 배전반·지진감지·화재감지·출입태깅기
   - ✅ Google Sheets 4종 모델 제작, 원본 그림·Blender 스크립트·GLB 저장.
@@ -115,6 +103,21 @@
   - ⚠️ 테스트 이미지는 160×320(세로가 긴 비율)이라 랙 규격(1U≈10:1)과 어긋난다. 실 장비 정면 크롭이 들어와야 제대로 보인다(R5)
 
 ## 완료
+
+- [x] ✅ 2026-10-02 3D 화면 내부 식별자 정리 — FMS 매뉴얼 캡처용 (netis-fms 요청 2, 사용자 결정 E27 Q4)
+  - ✅ 출처 표기 `netis-fms`·`NETIS-FMS` → 공개 브랜드 `productName`(기본 `NETIS FMS`). 로비 하단 `SOURCE · NETIS-FMS` → `데이터: <제품명>`.
+  - ✅ 에픽 번호·API 경로·필드명 노출 제거(`미연동 · E19 B4`, `GET /api/performance/series/zone`, `GET /api/tickets`, `assetCount`·`categoryCounts`).
+  - ⚖ «미연동»을 일괄 «연동 준비 중»으로 바꾸지 않았다 — **계획이 있는 것만** «연동 준비 중»(온습도 추이·장애 티켓 목록),
+    FMS 가 수집하지 않는 것은 «미제공»/«수집하지 않음»(장비 실시간 지표·트래픽·장비 단위 장애 밀도), 비활성 히트맵 배지는 «사용 불가».
+    계획 없는 것을 "준비 중"이라 쓰면 매뉴얼을 본 고객에게 거짓 약속이 된다(리뷰 🟡 반영으로 장애 밀도도 «미제공»).
+  - ✅ 제품명은 `BrandingProvider`(컨텍스트)로 한 번 받아 내린다. 받침 의존 조사(이/가·은/는·과/와·을/를)를 제품명 뒤에 붙이지 않는다.
+  - ✅ 하몬소프트 로고 유지. API 계층 오류 문구는 «서버»로 중립화.
+  - ✅ tsc·eslint·Node 테스트 11건·build 통과. 리뷰 🟢(🔴 0). 스텁 `PRODUCT_NAME` 으로 로비·씬·대시보드·랙·자산·히트맵 실화면 잔여 식별자 0 확인,
+    17자 제품명에서도 레이아웃 넘침 없음. 캡처: `/Volumes/ext-ssd/build-artifacts/rack3d/e27-q4/`
+  - ✅ 커밋 188c9b1 → 이미지 `main-188c9b1` 빌드·등록(digest 790013df…). 번들 잔여 식별자 0, public 39개 해시 일치.
+  - ✅ 운영 `main-0cd3ec5` generation/revision 15 전후 동일(배포 안 함 — netis-fms 판단).
+    ⚠️ `.latest_build_tag` = main-188c9b1 → 인자 없는 `deploy.sh` 는 이 이미지를 내보낸다.
+  - 증거: docs/deployments/2026-10-02-identifier-cleanup-build.json, 연동 문서 §11-44.
 
 - [x] ✅ 2026-09-30 고객사 브랜드명 연동·설치 번들용 이미지 빌드 완료
   - ✅ 기획: 공개 /api/auth/branding productName 사용, 실패 시 NETIS FMS 3D 관제. 하몬소프트 공급사 로고 유지.
