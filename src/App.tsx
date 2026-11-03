@@ -770,6 +770,13 @@ function LayoutObjectModel({
  * 클릭 핸들러를 달지 않는 것은 의도다 — 이 오브젝트들에는 붙일 상세 데이터가 없고,
  * 핸들러가 있으면 r3f가 `onPointerMissed`(전체 보기 복귀)를 막는다.
  */
+/** 상태 줄 강조. 통신은 FMS 와 같다 — 두절 빨강·지연 노랑, 미상은 강조하지 않는다. */
+function stateLineClass(line: string): string | undefined {
+  if (line === '통신: 두절') return 'alarm'
+  if (line === '통신: 지연' || line.startsWith('접점 경보') || line.endsWith(': 켜짐')) return 'attention'
+  return undefined
+}
+
 function LayoutObjectMesh({
   object,
   tileSize,
@@ -840,7 +847,7 @@ function LayoutObjectMesh({
                 <strong>{status.prefix}{object.asset?.name ?? object.label}</strong>
               )}
               {status.lines.map((line, index) => (
-                <span key={index} className={line.startsWith('접점 경보') || line.startsWith('통신:') ? 'attention' : undefined}>{line}</span>
+                <span key={index} className={stateLineClass(line)}>{line}</span>
               ))}
             </span>
           )}
@@ -2965,7 +2972,7 @@ function App() {
           {heatmapMode === 'state' && grid && (
             /* 상태는 자산이 연결된 장비에만 붙는다. 비어 보이는 이유를 밝히지 않으면 고장으로 오인한다. */
             <p className="state-view-note" role="status">
-              상태 표시 장비 {linkedObjectCount}개 · 자산 미연결 {sceneObjects.length - linkedObjectCount}개
+              상태 표시 장비 {linkedObjectCount}개 · 자산 미연결 {sceneObjects.filter((object) => object.type !== 'RACK').length - linkedObjectCount}개
               {linkedObjectCount === 0 ? ` — ${productName} 레이아웃 설정에서 장비에 자산을 연결하세요` : ''}
             </p>
           )}

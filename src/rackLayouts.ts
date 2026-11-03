@@ -246,7 +246,7 @@ export type SceneObject = {
   id: string
   /** FMS 원값(모르는 종류도 그대로). */
   type: string
-  /** 표시명 — `label` → 연결 자산 이름 → `type` 순(§11-31 ①). 지어내지 않는다. */
+  /** 표시명 — `label` 우선, 비었으면 `type`(§11-31 ①). 지어내지 않는다. */
   label: string
   /** 연결된 자산(E76). 있으면 이름표 아래에 상태 정보가 붙는다. */
   asset: LayoutObjectAsset | null
@@ -403,10 +403,10 @@ export function toObjectAsset(raw: unknown): LayoutObjectAsset | null {
 
 function toFacilityMetric(raw: unknown): FacilityMetric | null {
   if (typeof raw !== 'object' || raw === null) return null
-  const { key, value } = raw as Record<string, unknown>
+  const { key, name, value } = raw as Record<string, unknown>
   if (typeof key !== 'string' || !key) return null
   const known = typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
-  return { key, value: known ? value : null }
+  return { key, name: nullableText(name), value: known ? value : null }
 }
 
 /**
@@ -432,10 +432,10 @@ export function parseFacilityStatuses(raw: unknown): FacilityStatus[] | null {
   })
 }
 
-/** 표시명 — `label` → 연결 자산 이름 → `type`. 전부 FMS 원값이다. */
+/** 표시명 — `label` 우선, 비었으면 `type`. 둘 다 FMS 원값이다. */
 export function objectLabel(object: LayoutObject): string {
   const label = object.label?.trim()
-  return label ? label : toObjectAsset(object.asset)?.name ?? object.type
+  return label ? label : object.type
 }
 
 /**
@@ -558,7 +558,8 @@ export function buildZoneScene(
         id: `fms-layout-object-${object.id}`,
         type: object.type,
         label: objectLabel(object),
-        asset: toObjectAsset(object.asset),
+        // 계약상 RACK 은 자산을 잇지 않는다. 옛 저장값이 남아 있어도 상태를 붙이지 않는다.
+        asset: object.type === 'RACK' ? null : toObjectAsset(object.asset),
         color: objectColor(object.type),
         heightM: objectHeightM(object),
         placement,

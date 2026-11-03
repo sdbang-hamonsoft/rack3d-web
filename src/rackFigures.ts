@@ -411,9 +411,11 @@ export function facilityLabelStatus(asset: LayoutObjectAsset, status: FacilitySt
   const { severity, commStatus: comm, collectedAt } = status
   const severityAlarm = severity !== null && severity !== 'NORMAL'
   const commLine = facilityCommLine(status)
-  // 켜진 접점은 경보다(E76 계약). 누수·화재 감지는 자기 줄이 있어 건수에서 뺀다.
+  // 켜진 접점은 경보다(E76 계약). 건수는 FMS 와 같이 `alm_*` 만 세고, 그 밖의 접점은 이름을 적는다.
+  // 누수·화재 감지는 자기 줄이 있다.
   const activeContacts = status.metrics.filter((metric) => metric.value === true && metric.key !== 'run_state')
-  const contactAlarms = activeContacts.filter((metric) => metric.key !== 'leak_detected' && metric.key !== 'fire_detected').length
+  const contactAlarms = activeContacts.filter((metric) => metric.key.startsWith('alm_')).length
+  const otherContacts = activeContacts.filter((metric) => !metric.key.startsWith('alm_') && metric.key !== 'leak_detected' && metric.key !== 'fire_detected')
 
   let tone: FacilityLabelTone = 'normal'
   if (severity === 'CRITICAL' || severity === 'MAJOR' || comm === 'OFFLINE') tone = 'danger'
@@ -425,6 +427,7 @@ export function facilityLabelStatus(asset: LayoutObjectAsset, status: FacilitySt
   const commProblem = comm === 'OFFLINE' || comm === 'STALE' || (comm === null && status.stale)
   if (severityAlarm || commProblem || activeContacts.length > 0) lines = lines.filter((line) => line !== '상태: 정상')
   if (contactAlarms > 0) lines.push(`접점 경보 ${contactAlarms}건`)
+  otherContacts.forEach((metric) => lines.push(`${metric.name ?? '접점'}: 켜짐`))
   // 네 등급 밖의 새 값은 제목 글자로 뭉개지 않고 원값을 적는다(C5).
   if (severityAlarm && !['CAUTION', 'MAJOR', 'CRITICAL'].includes(severity)) lines.unshift(`판정: ${severityLabel(severity)}`)
   if (!severityAlarm && lines.length === 0) {

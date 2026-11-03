@@ -970,6 +970,7 @@ kbd { font-size: 13px; }
 .layout-object-state { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 5px 10px 6px; background: #0a1626f2; color: #e6eff6; font: 600 10px/1.4 ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; }
 .layout-object-state strong { font-weight: 700; color: #e6eff6; }
 .layout-object-state .attention { color: #ffb724; }
+.layout-object-state .alarm { color: #ff4d8d; }
 .layout-object-label.danger .layout-object-state strong { color: #ff4d8d; }
 .layout-object-label.warning .layout-object-state strong { color: #ffb724; }
 .layout-object-label.muted .layout-object-state { color: #9fb4c7; }

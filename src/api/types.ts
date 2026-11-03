@@ -252,6 +252,8 @@ export type LayoutObjectAsset = {
 /** 설비 측정값 1건. `value` 는 FMS 원값이고, 없으면 `null` 이다(0·false 로 치환 금지, C6). */
 export type FacilityMetric = {
   key: string
+  /** FMS 지표 사전의 표시명. */
+  name: string | null
   value: number | boolean | string | null
 }
 

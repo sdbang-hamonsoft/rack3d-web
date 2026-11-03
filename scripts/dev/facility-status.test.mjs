@@ -7,7 +7,7 @@ import { facilityLabelStatus } from '../../src/rackFigures.ts'
 const asset = { assetId: 9, name: '온습도 #1', monitoringType: 'TH' }
 const object = (o) => ({ id: 1, type: 'SENSOR', x: 1, z: 1, dir: 'NORTH', label: '', rack: null, asset: null, ...o })
 const status = (o) => ({ assetId: 9, severity: 'NORMAL', stale: false, collectedAt: '2026-11-03T03:12:40Z', metrics: [], commStatus: 'ONLINE', ...o })
-const metric = (key, value) => ({ key, value })
+const metric = (key, value, name = null) => ({ key, name, value })
 const label = (monitoringType, s, feedFailed = false) => facilityLabelStatus({ assetId: 9, name: null, monitoringType }, s, feedFailed)
 
 test('the requested example renders line for line', () => {
@@ -23,10 +23,9 @@ test('only the E76 contract counts as a link', () => {
   for (const assetId of [0, -1, 1.5, '9', null]) assert.equal(toObjectAsset({ ...asset, assetId }), null)
 })
 
-test('label prefers FMS label, then asset name, then type', () => {
+test('label prefers FMS label, then type', () => {
   assert.equal(objectLabel(object({ label: '누수감지-01', asset })), '누수감지-01')
-  assert.equal(objectLabel(object({ label: ' ', asset })), '온습도 #1')
-  assert.equal(objectLabel(object({ asset: { assetId: 9 } })), 'SENSOR')
+  assert.equal(objectLabel(object({ label: ' ', asset })), 'SENSOR')
 })
 
 test('scene keeps unlinked objects as they were', () => {
@@ -34,8 +33,9 @@ test('scene keeps unlinked objects as they were', () => {
     object({ id: 1, asset }),
     object({ id: 2, x: 2 }),
     object({ id: 3, x: 3, asset: { id: 9 } }),
+    object({ id: 4, x: 0, type: 'RACK', asset }),
   ] }
-  assert.deepEqual(buildZoneScene([], layout, []).objects.map((o) => o.asset?.assetId ?? null), [9, null, null])
+  assert.deepEqual(buildZoneScene([], layout, []).objects.map((o) => o.asset?.assetId ?? null), [9, null, null, null])
 })
 
 test('a response of the wrong shape is a failure, and broken items are dropped', () => {
@@ -43,7 +43,7 @@ test('a response of the wrong shape is a failure, and broken items are dropped',
   assert.deepEqual(parseFacilityStatuses([null, 7, { assetId: 'x' }, { assetId: 0 }]), [])
   assert.deepEqual(
     parseFacilityStatuses([{ assetId: 9, severity: { a: 1 }, stale: 'yes', collectedAt: 'garbage', commStatus: 'WEIRD', metrics: [null, { key: 'k', value: { b: 2 } }, { value: 1 }] }]),
-    [{ assetId: 9, severity: null, stale: false, collectedAt: null, metrics: [{ key: 'k', value: null }], commStatus: null }],
+    [{ assetId: 9, severity: null, stale: false, collectedAt: null, metrics: [{ key: 'k', name: null, value: null }], commStatus: null }],
   )
   assert.equal(parseFacilityStatuses([{ assetId: 9, severity: 'constructor' }])[0].severity, null)
   const metrics = [metric('t', 0), metric('a', false), metric('b', true), metric('o', '송풍'), metric('h', null)]
@@ -92,8 +92,8 @@ test('an alarm stays visible when the feed fails', () => {
 
 test('a single clear contact never claims the whole device is normal', () => {
   const fire = [metric('fire_detected', false), metric('smoke_detected', true)]
-  assert.deepEqual(label('FIRE', status({ metrics: fire })), { tone: 'warning', prefix: '⚠️ [주의] ', lines: ['접점 경보 1건'] })
-  assert.deepEqual(label('FIRE', status({ severity: 'CRITICAL', metrics: fire })), { tone: 'danger', prefix: '⚠️ [경보] ', lines: ['접점 경보 1건'] })
+  assert.deepEqual(label('FIRE', status({ metrics: fire })), { tone: 'warning', prefix: '⚠️ [주의] ', lines: ['접점: 켜짐'] })
+  assert.deepEqual(label('FIRE', status({ severity: 'CRITICAL', metrics: fire })), { tone: 'danger', prefix: '⚠️ [경보] ', lines: ['접점: 켜짐'] })
   const leak = [metric('leak_detected', false)]
   assert.deepEqual(label('LEAK', status({ commStatus: 'OFFLINE', stale: true, metrics: leak })), { tone: 'danger', prefix: '⚠️ [경보] ', lines: ['통신: 두절'] })
   assert.deepEqual(label('LEAK', status({ severity: 'MAJOR', metrics: leak })), { tone: 'danger', prefix: '⚠️ [경보] ', lines: [] })
@@ -101,7 +101,7 @@ test('a single clear contact never claims the whole device is normal', () => {
 
 test('contacts count for every device type, and a true contact is not normal tone', () => {
   assert.deepEqual(label('UPS', status({ metrics: [metric('battery_soc', 90), metric('alm_input', true)] })), { tone: 'warning', prefix: '⚠️ [주의] ', lines: ['배터리: 90 %', '접점 경보 1건'] })
-  assert.deepEqual(label('DPM', status({ metrics: [metric('blackout_detected', true)] })), { tone: 'warning', prefix: '⚠️ [주의] ', lines: ['접점 경보 1건'] })
+  assert.deepEqual(label('DPM', status({ metrics: [metric('blackout_detected', true, '정전 감지')] })), { tone: 'warning', prefix: '⚠️ [주의] ', lines: ['정전 감지: 켜짐'] })
   assert.deepEqual(label('LEAK', status({ metrics: [metric('leak_detected', true)] })), { tone: 'warning', prefix: '⚠️ [주의] ', lines: ['상태: 누수 감지'] })
   // 가동 접점은 경보가 아니다.
   assert.equal(label('HVAC', status({ metrics: [metric('run_state', true)] })).tone, 'normal')
