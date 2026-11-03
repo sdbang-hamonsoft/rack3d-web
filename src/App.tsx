@@ -17,8 +17,8 @@ import {
 } from './rackLayouts'
 import type { RackCacheEntry, SceneGrid, SceneObject, ScenePlacement } from './rackLayouts'
 import type { RackData, ServerData, ServerModel } from './rackLayouts'
-import { collectZones, fetchSidebar, fetchZoneLayout, fetchZoneRacks, fetchZoneUMaps, type ZoneSummary } from './api/fms'
-import type { AssetImageView, MeResponse, RackSummary, RackSeverity, RackUMap, ZoneLayout } from './api/types'
+import { collectZones, fetchSidebar, fetchZoneFacilityStatus, fetchZoneLayout, fetchZoneRacks, fetchZoneUMaps, type ZoneSummary } from './api/fms'
+import type { AssetImageView, FacilityStatus, MeResponse, RackSummary, RackSeverity, RackUMap, ZoneLayout } from './api/types'
 import {
   PHOTO_DEMAND_FRONT,
   PHOTO_DEMAND_REAR,
@@ -44,11 +44,13 @@ import {
   largestFreeBlock,
   rackAvailableUnits,
   rackOccupancyPercent,
+  facilityLabelStatus,
+  severityLabel,
   severityToneColors,
   severityTones,
   unmountedAssetCount,
 } from './rackFigures'
-import type { HeatmapDataset, HeatmapMode, RackHeatmapVisual, SeverityTone, ZoneAggregate } from './rackFigures'
+import type { FacilityLabelStatus, HeatmapDataset, HeatmapMode, RackHeatmapVisual, SeverityTone, ZoneAggregate } from './rackFigures'
 import { useBranding, useProductName } from './hooks/useBranding'
 import './App.css'
 
@@ -198,23 +200,6 @@ type ThemeMode = 'dark' | 'light'
  * 전산실 목록은 netis-fms `GET /api/locations/sidebar`가 SSOT다(D1).
  * 예전의 하드코딩 3건(서울/판교/부산)과 그 평균온도는 실측이 아니어서 제거했다.
  */
-
-/** FMS 판정 등급 → 한글 라벨. 등급 자체는 FMS 원값을 그대로 쓴다(E19 C1). */
-const severityLabels: Record<RackSeverity, string> = {
-  NORMAL: '정상',
-  CAUTION: '주의',
-  MAJOR: '경고',
-  CRITICAL: '심각',
-}
-
-/**
- * 등급 라벨. **원값 폴백이 있는 이유**: `RackSeverity`는 우리 타입이지 서버 검증이 아니다(C5).
- * FMS가 새 등급을 추가하면 인덱싱이 `undefined`가 되어 화면에서 등급 칸이 통째로 사라진다 —
- * 그때는 모르는 원값이라도 보여주는 편이 맞다. 호출부마다 폴백을 붙였다 말았다 하지 않게 함수로 둔다.
- */
-function severityLabel(severity: RackSeverity): string {
-  return severityLabels[severity] ?? severity
-}
 
 /**
  * 우리 GLB 3종의 표시명 — **장비의 실제 모델명이 아니다.**
@@ -785,7 +770,16 @@ function LayoutObjectModel({
  * 클릭 핸들러를 달지 않는 것은 의도다 — 이 오브젝트들에는 붙일 상세 데이터가 없고,
  * 핸들러가 있으면 r3f가 `onPointerMissed`(전체 보기 복귀)를 막는다.
  */
-function LayoutObjectMesh({ object, tileSize }: { object: SceneObject; tileSize: number }) {
+function LayoutObjectMesh({
+  object,
+  tileSize,
+  status,
+}: {
+  object: SceneObject
+  tileSize: number
+  /** State Information 보기에서 연결된 자산의 상태 정보. 그 밖에는 `null` 이고 이름만 보인다. */
+  status: FacilityLabelStatus | null
+}) {
   const { placement, heightM } = object
   // 1타일보다 조금 작게 — 옆 칸과 붙어 한 덩어리로 보이지 않게 칸 경계를 남긴다.
   const footprint = Math.max(0.12, tileSize * 0.84)
@@ -824,10 +818,23 @@ function LayoutObjectMesh({ object, tileSize }: { object: SceneObject; tileSize:
         **이름표 칩(테두리·점)이 팔레트 색의 최종 보증이다** — 모델을 쓰는 오브젝트는 받침대가
         모델에 가려질 수 있어서, 2D 에디터와의 색 대응이 여기에 남는다.
       */}
-      <Html position={[0, LAYOUT_OBJECT_BASE_Y + Math.max(heightM + elevation + 0.14, 0.62), 0]} center distanceFactor={8} zIndexRange={[1, 0]}>
-        <div className="layout-object-label" style={{ borderColor: object.color }}>
-          <i style={{ background: object.color }} />
-          {object.label}
+      {/* 상태 정보는 글이 많아 거리에 따라 줄이면 읽을 수 없다. 이때만 화면 크기를 고정한다. */}
+      <Html position={[0, LAYOUT_OBJECT_BASE_Y + Math.max(heightM + elevation + 0.14, 0.62), 0]} center distanceFactor={status ? undefined : 8} zIndexRange={[1, 0]}>
+        <div className={`layout-object-label${status ? ` has-status ${status.tone}` : ''}`} style={{ borderColor: object.color }}>
+          <span className="layout-object-name">
+            <i style={{ background: object.color }} />
+            {object.label}
+          </span>
+          {status && (
+            <span className="layout-object-state">
+              {(status.prefix || (object.asset?.name && object.asset.name !== object.label)) && (
+                <strong>{status.prefix}{object.asset?.name ?? object.label}</strong>
+              )}
+              {status.lines.map((line, index) => (
+                <span key={index} className={line.startsWith('접점 경보') || line.startsWith('통신:') ? 'attention' : undefined}>{line}</span>
+              ))}
+            </span>
+          )}
         </div>
       </Html>
     </group>
@@ -1303,10 +1310,12 @@ function DataCenterScene({
   theme,
   onFocusRack,
   onSelectServer,
+  objectStatusFor,
 }: {
   grid: SceneGrid | null
   racks: RackData[]
   objects: SceneObject[]
+  objectStatusFor: (object: SceneObject) => FacilityLabelStatus | null
   focusedRack: RackData | null
   selectedServer: ServerData | null
   heatmapVisuals: Map<string, RackHeatmapVisual>
@@ -1372,7 +1381,12 @@ function DataCenterScene({
       <Suspense fallback={<Loading />}>
         {grid && <FloorTiles grid={grid} theme={theme} />}
         {grid && objects.map((object) => (
-          <LayoutObjectMesh key={object.id} object={object} tileSize={grid.tileSize} />
+          <LayoutObjectMesh
+            key={object.id}
+            object={object}
+            tileSize={grid.tileSize}
+            status={objectStatusFor(object)}
+          />
         ))}
         {/*
           **배치가 없는 랙은 그리지 않는다**(E18 ⑤) — 좌표를 지어내면 실제 배치로 오인된다.
@@ -2025,11 +2039,11 @@ function HeatmapControl({
 }) {
   const [open, setOpen] = useState(false)
   const meta = heatmapModeMeta[mode]
-  const activeMode = mode === 'normal' ? null : mode
+  const activeMode = mode === 'normal' || mode === 'state' ? null : mode
 
   return (
     <section
-      className={`heatmap-control${activeMode ? ' active' : ''}${open ? ' open' : ''}${hidden ? ' dashboard-open' : ''}`}
+      className={`heatmap-control${mode !== 'normal' ? ' active' : ''}${open ? ' open' : ''}${hidden ? ' dashboard-open' : ''}`}
       aria-label="3D 히트맵 보기 설정"
       aria-hidden={hidden}
       inert={hidden}
@@ -2078,7 +2092,7 @@ function HeatmapControl({
             <small><b>{formatHeatmapValue(activeMode, dataset.min)}</b><b>{formatHeatmapValue(activeMode, dataset.max)}</b></small>
           </span>
         ) : (
-          <em className="heatmap-toggle-off">OFF</em>
+          <em className="heatmap-toggle-off">{mode === 'state' ? 'ON' : 'OFF'}</em>
         )}
         <span className="heatmap-toggle-chevron" aria-hidden="true">{open ? '⌄' : '⌃'}</span>
       </button>
@@ -2597,6 +2611,32 @@ function App() {
   /** FMS 랙 목록(SSOT) + ZONE 배치 + ZONE u맵. 값이 안 바뀐 랙은 객체 신원을 유지한다. */
   const { grid, racks, objects: sceneObjects } = useZoneScene(zoneRacks, layout, uMaps)
   /**
+   * 장비 상태(E76) — 값이 바뀌는 데이터라 랙 목록과 같은 30초 폴링이다.
+   * **State Information 보기에서, 연결된 자산이 있을 때만 받는다.** 다른 보기에는 쓰지 않고, 이 API 가 없는
+   * 옛 FMS 에 붙어도 404 가 쌓이지 않는다. 연결이 새로 생기면 배치와 함께 "지금 새로고침"으로 반영된다.
+   */
+  const linkedObjectCount = useMemo(() => sceneObjects.filter((object) => object.asset !== null).length, [sceneObjects])
+  const stateViewActive = heatmapMode === 'state' && linkedObjectCount > 0
+  const facilityFetcher = useMemo(
+    () => (sessionReady && selectedZoneId !== null && stateViewActive ? () => fetchZoneFacilityStatus(selectedZoneId) : null),
+    [sessionReady, selectedZoneId, stateViewActive],
+  )
+  const facilityResource = usePolledResource(facilityFetcher, RACK_POLL_INTERVAL_MS)
+  const facilityStatuses = facilityResource.data
+  const facilityFeedFailed = facilityResource.failure !== null
+  const facilityStatusById = useMemo(() => {
+    const statuses = new Map<number, FacilityStatus>()
+    facilityStatuses?.forEach((status) => statuses.set(status.assetId, status))
+    return statuses
+  }, [facilityStatuses])
+  const objectStatusFor = useCallback((object: SceneObject): FacilityLabelStatus | null => {
+    if (!stateViewActive || !object.asset) return null
+    // 받기 전이라고 "상태 없음"이나 정상으로 보이면 안 된다.
+    if (facilityStatuses === null && !facilityFeedFailed) return { tone: 'muted', prefix: '', lines: ['상태 확인 중'] }
+    return facilityLabelStatus(object.asset, facilityStatusById.get(object.asset.assetId), facilityFeedFailed)
+  }, [stateViewActive, facilityStatuses, facilityStatusById, facilityFeedFailed])
+
+  /**
    * 배치되지 않은 랙 — 3D에는 없지만 목록·검색·경보에는 있다. 수를 밝히지 않으면
    * "씬에 랙이 몇 대 빠져 있다"를 사용자가 알 방법이 없다.
    */
@@ -2640,7 +2680,7 @@ function App() {
   )
 
   const heatmapDataset = useMemo(() => getHeatmapDataset(racks, heatmapMode, rackFactsById), [racks, heatmapMode, rackFactsById])
-  const activeHeatmapMode = heatmapMode === 'normal' ? null : heatmapMode
+  const activeHeatmapMode = heatmapMode === 'normal' || heatmapMode === 'state' ? null : heatmapMode
 
   /** FMS 판정이 NORMAL이 아닌 랙 — 경보 탐색기·대시보드 표가 함께 쓴다(같은 소스여야 수가 안 갈린다). */
   const alertRacks = useMemo<RackAlertEntry[]>(() => {
@@ -2680,6 +2720,9 @@ function App() {
         : uMapResource.failure ? '랙 U 배치를' : '3D 배치를'
       return { tone: 'stale', label: 'LIVE · 구조 미갱신', detail: `${what} 갱신하지 못했습니다 · 측정값 갱신 ${time}` }
     }
+    if (facilityResource.failure) {
+      return { tone: 'stale', label: 'LIVE · 설비 상태 미갱신', detail: `설비 상태를 갱신하지 못했습니다. ${facilityResource.failure.message} · 랙 측정값 갱신 ${time}` }
+    }
     return { tone: 'live', label: 'LIVE', detail: `마지막 갱신 ${time}` }
   })()
 
@@ -2695,6 +2738,7 @@ function App() {
     racksResource.retryNow()
     uMapResource.retryNow()
     layoutResource.retryNow()
+    if (stateViewActive) facilityResource.retryNow()
   }
 
   /** 상단바 "IN RACKS" — 랙 내 자산 합(가짜 0 방지 헬퍼 경유). */
@@ -2899,6 +2943,7 @@ function App() {
               objects={sceneObjects}
               focusedRack={focusedRack}
               selectedServer={selectedServer}
+              objectStatusFor={objectStatusFor}
               heatmapVisuals={heatmapDataset.visuals}
               rackSeverities={rackSeverities}
               theme={theme}
@@ -2907,6 +2952,14 @@ function App() {
             />
           </Canvas>
           <div className="crosshair" aria-hidden="true" />
+
+          {heatmapMode === 'state' && grid && (
+            /* 상태는 자산이 연결된 장비에만 붙는다. 비어 보이는 이유를 밝히지 않으면 고장으로 오인한다. */
+            <p className="state-view-note" role="status">
+              상태 표시 장비 {linkedObjectCount}개 · 자산 미연결 {sceneObjects.length - linkedObjectCount}개
+              {linkedObjectCount === 0 ? ` — ${productName} 레이아웃 설정에서 장비에 자산을 연결하세요` : ''}
+            </p>
+          )}
 
           {/*
             랙 목록의 로딩·권한·실패 상태를 씬 위에 명시한다.

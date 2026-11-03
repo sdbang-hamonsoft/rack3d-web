@@ -233,8 +233,47 @@ export type LayoutObject = {
   /** 사용자 지정 명칭. **빈 문자열일 수 있다** — 그때는 `type` 을 표시명으로 쓴다(§11-31 ①). */
   label: string
   rack: LayoutObjectRack | null
-  /** 자산 참조. 실측은 전부 `null` 이고 rack3d 는 쓰지 않는다 — 값을 읽지 말 것. */
+  /**
+   * 연결된 자산(netis-fms E76). 연결이 없으면 `null`.
+   *
+   * ⚠️ E76 이전 FMS 는 같은 자리에 `{id, code, ...}` 를 준다 — 타입을 믿지 말고
+   * `toObjectAsset` 을 거쳐 읽는다. 그 형태는 "연결 없음"으로 취급된다.
+   */
   asset: unknown
+}
+
+/** `objects[].asset` — 3D 오브젝트에 연결된 자산(E76). */
+export type LayoutObjectAsset = {
+  assetId: number
+  name: string | null
+  monitoringType: string | null
+}
+
+/** 설비 측정값 1건. `value` 는 FMS 원값이고, 없으면 `null` 이다(0·false 로 치환 금지, C6). */
+export type FacilityMetric = {
+  key: string
+  value: number | boolean | string | null
+}
+
+export type FacilityCommStatus = 'ONLINE' | 'STALE' | 'OFFLINE' | 'UNKNOWN'
+
+/**
+ * `GET /api/zones/{zoneId}/facility-status` 의 원소(ASSET READ, 계약: netis-fms `docs/E76-rack3d-facility-status-api.md`).
+ *
+ * `severity` 는 **FMS 판정**이다 — rack3d 가 측정값으로 다시 판정하지 않는다.
+ *
+ * ⚠️ **수집 전·비수집 자산도 `NORMAL` 로 온다.** 그래서 `collectedAt` 이 `null` 이면 NORMAL 이어도
+ * 정상으로 표시하지 않는다. `metrics` 는 호출자에게 DASHBOARD 또는 PERFORMANCE 조회 권한이 있을 때만 채워진다.
+ * 응답에는 3D 오브젝트가 없는 배경 핀 자산도 섞여 있는데, rack3d 는 연결된 오브젝트의 것만 쓴다.
+ */
+export type FacilityStatus = {
+  assetId: number
+  severity: RackSeverity | null
+  /** 통신 이상 — 수신 지연 또는 두절(FMS 판정). `commStatus` 가 없는 응답의 대체 근거다. */
+  stale: boolean
+  collectedAt: string | null
+  metrics: FacilityMetric[]
+  commStatus: FacilityCommStatus | null
 }
 
 /**

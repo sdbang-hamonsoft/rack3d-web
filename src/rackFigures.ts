@@ -12,13 +12,14 @@
 
 import * as THREE from 'three'
 import type { RackData, ServerData } from './rackLayouts'
-import type { RackSeverity, RackSummary } from './api/types'
+import type { FacilityMetric, FacilityStatus, LayoutObjectAsset, RackSeverity, RackSummary } from './api/types'
 
 /** 값이 없을 때 화면에 쓰는 표기. **null을 0으로 바꾸지 않는다**(C6). */
 export const NO_VALUE = '—'
 
-export type HeatmapMode = 'normal' | 'temperature' | 'power' | 'traffic' | 'occupancy' | 'incidents'
-export type ActiveHeatmapMode = Exclude<HeatmapMode, 'normal'>
+export type HeatmapMode = 'normal' | 'state' | 'temperature' | 'power' | 'traffic' | 'occupancy' | 'incidents'
+/** 랙을 색으로 칠하는 보기. `state` 는 랙이 아니라 설비 이름표에 정보를 붙이는 보기라 여기 들지 않는다. */
+export type ActiveHeatmapMode = Exclude<HeatmapMode, 'normal' | 'state'>
 
 export type RackHeatmapVisual = {
   mode: ActiveHeatmapMode
@@ -53,6 +54,7 @@ export type HeatmapModeMeta = {
  */
 export const heatmapModeMeta: Record<HeatmapMode, HeatmapModeMeta> = {
   normal: { label: 'NORMAL VIEW', shortLabel: 'NORMAL', description: '기본 보기', symbol: '◇', available: true },
+  state: { label: 'STATE INFORMATION', shortLabel: 'STATE', description: '장비 상태 정보', symbol: 'S', available: true },
   temperature: { label: 'TEMPERATURE', shortLabel: 'TEMP', description: '랙 TH 센서 온도', symbol: 'T', available: true },
   power: { label: 'POWER DRAW', shortLabel: 'POWER', description: '랙 DPM 전력 합', symbol: 'P', available: true },
   traffic: { label: 'NETWORK TRAFFIC', shortLabel: 'TRAFFIC', description: '장비 트래픽 — 수집하지 않음', symbol: 'N', available: false },
@@ -220,7 +222,7 @@ export function getHeatmapDataset(
   mode: HeatmapMode,
   factsById: Map<string, RackSummary>,
 ): HeatmapDataset {
-  if (mode === 'normal' || !heatmapModeMeta[mode].available) return { visuals: new Map(), min: null, max: null }
+  if (mode === 'normal' || mode === 'state' || !heatmapModeMeta[mode].available) return { visuals: new Map(), min: null, max: null }
 
   const values = rackData.map((rack) => ({ rack, value: getRackHeatmapValue(factsById.get(rack.id), mode) }))
   const known = values.map(({ value }) => value).filter((value): value is number => value !== null)
@@ -304,6 +306,137 @@ export const severityTones: Record<RackSeverity, SeverityTone> = {
   CAUTION: 'warning',
   MAJOR: 'warning',
   CRITICAL: 'critical',
+}
+
+/** FMS 판정 등급 → 한글 라벨. 등급 자체는 FMS 원값을 그대로 쓴다(E19 C1). */
+const severityLabels: Record<RackSeverity, string> = {
+  NORMAL: '정상',
+  CAUTION: '주의',
+  MAJOR: '경고',
+  CRITICAL: '심각',
+}
+
+/**
+ * 등급 라벨. **원값 폴백이 있는 이유**: `RackSeverity`는 우리 타입이지 서버 검증이 아니다(C5).
+ * FMS가 새 등급을 추가하면 인덱싱이 `undefined`가 되어 화면에서 등급 칸이 통째로 사라진다 —
+ * 그때는 모르는 원값이라도 보여주는 편이 맞다. 호출부마다 폴백을 붙였다 말았다 하지 않게 함수로 둔다.
+ */
+export function severityLabel(severity: RackSeverity): string {
+  return severityLabels[severity] ?? severity
+}
+
+// ── 장치 이름표 아래 상태 정보 (netis-fms E76) ─────────────────────────────────────
+
+/** FMS 시설종합현황 핀(`facilityPins.ts`)과 같은 문구. 값이 없는 줄은 뺀다. */
+function facilityMetricLines(monitoringType: string | null, metrics: FacilityMetric[]): string[] {
+  const values = new Map(metrics.map((metric) => [metric.key, metric.value]))
+  const num = (key: string) => {
+    const value = values.get(key)
+    return typeof value === 'number' ? value : null
+  }
+  const part = (label: string, value: number | null, digits: number, unit: string) => (value === null ? null : `${label}: ${value.toFixed(digits)} ${unit}`)
+  const joined = (...parts: (string | null)[]) => {
+    const present = parts.filter((item): item is string => item !== null)
+    return present.length > 0 ? [present.join(' | ')] : []
+  }
+  const detected = (key: string, what: string) => {
+    const value = values.get(key)
+    return typeof value === 'boolean' ? [value ? `상태: ${what} 감지` : '상태: 정상'] : []
+  }
+  switch (monitoringType) {
+    case 'TH':
+      return joined(part('온도', num('temp'), 1, '°C'), part('습도', num('humidity'), 1, '%'))
+    case 'HVAC': {
+      const lines: string[] = []
+      const state = values.get('operating_state')
+      if (typeof state === 'string' && state) lines.push(`상태: ${state}`)
+      const temp = num('temp')
+      const humidity = num('humidity')
+      const climate = [temp === null ? null : `${temp.toFixed(1)} °C`, humidity === null ? null : `${humidity.toFixed(1)} %`].filter((item) => item !== null)
+      if (climate.length > 0) lines.push(climate.join(' / '))
+      return lines
+    }
+    case 'UPS': {
+      const backup = num('battery_backup_min')
+      return [
+        ...joined(part('배터리', num('battery_soc'), 0, '%'), part('출력', num('active_power'), 1, 'kW')),
+        ...(backup === null ? [] : [`백업 가능: ${backup.toFixed(0)} 분`]),
+      ]
+    }
+    case 'DPM':
+      return joined(part('전력', num('active_power'), 1, 'kW'), part('전압', num('volt_r'), 0, 'V'))
+    case 'LEAK':
+      return detected('leak_detected', '누수')
+    case 'FIRE': {
+      const smoke = num('smoke_density')
+      return [...detected('fire_detected', '화재'), ...(smoke === null ? [] : [`연기 농도: ${smoke.toFixed(1)} %`])]
+    }
+    default:
+      return []
+  }
+}
+
+/** FMS `commLabel` 과 같다. ONLINE 은 적지 않는다. `commStatus` 가 없는 응답은 `stale` 로만 안다. */
+function facilityCommLine(status: FacilityStatus | undefined): string | null {
+  switch (status?.commStatus) {
+    case 'OFFLINE': return '통신: 두절'
+    case 'STALE': return '통신: 지연'
+    case 'UNKNOWN': return '통신: 미상'
+    case 'ONLINE': return null
+    default: return status?.stale ? '통신: 이상' : null
+  }
+}
+
+export type FacilityLabelTone = 'danger' | 'warning' | 'normal' | 'muted'
+
+export type FacilityLabelStatus = {
+  tone: FacilityLabelTone
+  /** `⚠️ [경보] ` 처럼 제목 앞에 붙는 글자. 평상시에는 빈 문자열이다. */
+  prefix: string
+  lines: string[]
+}
+
+/**
+ * State Information 보기의 상태 정보. 색과 문구는 FMS 시설종합현황 핀과 같다
+ * (심각·경고·두절 빨강, 주의·지연 노랑, 겹치면 더 나쁜 쪽).
+ *
+ * **값을 받아 FMS 가 정상으로 판정한 경우에만 `상태: 정상` 이다.** FMS 는 수집 전·비수집 자산도 `NORMAL` 로
+ * 주므로 수신 이력이 없으면 `미수집` 이다. 측정값 권한이 없어 `metrics` 가 비어도 판정은 항상 보인다.
+ *
+ * @param feedFailed `facility-status` 를 지금 못 받고 있으면 `true`(`status` 는 마지막으로 받은 값).
+ */
+export function facilityLabelStatus(asset: LayoutObjectAsset, status: FacilityStatus | undefined, feedFailed: boolean): FacilityLabelStatus {
+  if (!status) return { tone: 'muted', prefix: '', lines: [feedFailed ? '상태 미갱신' : '상태 없음'] }
+
+  const { severity, commStatus: comm, collectedAt } = status
+  const severityAlarm = severity !== null && severity !== 'NORMAL'
+  const commLine = facilityCommLine(status)
+  // 켜진 접점은 경보다(E76 계약). 누수·화재 감지는 자기 줄이 있어 건수에서 뺀다.
+  const activeContacts = status.metrics.filter((metric) => metric.value === true && metric.key !== 'run_state')
+  const contactAlarms = activeContacts.filter((metric) => metric.key !== 'leak_detected' && metric.key !== 'fire_detected').length
+
+  let tone: FacilityLabelTone = 'normal'
+  if (severity === 'CRITICAL' || severity === 'MAJOR' || comm === 'OFFLINE') tone = 'danger'
+  else if (severityAlarm || comm === 'STALE' || activeContacts.length > 0) tone = 'warning'
+  else if (feedFailed || severity === null || !collectedAt || commLine !== null) tone = 'muted'
+
+  let lines = facilityMetricLines(asset.monitoringType, status.metrics)
+  // `상태: 정상` 은 접점 하나만 본 말이라, 다른 경보나 통신 이상과 함께 두면 거짓이 된다.
+  const commProblem = comm === 'OFFLINE' || comm === 'STALE' || (comm === null && status.stale)
+  if (severityAlarm || commProblem || activeContacts.length > 0) lines = lines.filter((line) => line !== '상태: 정상')
+  if (contactAlarms > 0) lines.push(`접점 경보 ${contactAlarms}건`)
+  // 네 등급 밖의 새 값은 제목 글자로 뭉개지 않고 원값을 적는다(C5).
+  if (severityAlarm && !['CAUTION', 'MAJOR', 'CRITICAL'].includes(severity)) lines.unshift(`판정: ${severityLabel(severity)}`)
+  if (!severityAlarm && lines.length === 0) {
+    if (severity === null) lines.push('상태 없음')
+    else if (!collectedAt) lines.push('미수집')
+    else if (commLine === null && activeContacts.length === 0) lines.push(`상태: ${severityLabel(severity)}`)
+  }
+  // 비수집 자산의 "미상"은 `미수집` 과 같은 말이라 또 적지 않는다.
+  if (commLine !== null && (comm !== 'UNKNOWN' || collectedAt)) lines.push(commLine)
+  if (feedFailed) lines.push('상태 미갱신')
+  const prefix = tone === 'danger' ? '⚠️ [경보] ' : tone === 'warning' ? '⚠️ [주의] ' : ''
+  return { tone, prefix, lines }
 }
 
 /** 랙 경보 3D 표시·범례가 함께 쓰는 색. 한 화면에서 색과 범례가 어긋나지 않게 한 곳에 둔다. */

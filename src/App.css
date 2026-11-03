@@ -961,6 +961,26 @@ kbd { font-size: 13px; }
 [data-theme="light"] .layout-object-label { background: #ffffffe8; color: #23394a; }
 
 /*
+  E76 — State Information 보기. 이름표 칩 아래에 어두운 상태 패널을 붙인다.
+  칩의 테두리·점(팔레트 색)은 그대로 둔다. 패널은 라이트 테마에서도 어둡다: 밝은 바닥 위에서 더 잘 읽힌다.
+*/
+.layout-object-name { display: flex; align-items: center; gap: 6px; }
+.layout-object-label.has-status { flex-direction: column; align-items: stretch; gap: 0; padding: 0; overflow: hidden; font-size: 11px; }
+.layout-object-label.has-status .layout-object-name { justify-content: center; padding: 4px 10px; }
+.layout-object-state { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 5px 10px 6px; background: #0a1626f2; color: #e6eff6; font: 600 10px/1.4 ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; }
+.layout-object-state strong { font-weight: 700; color: #e6eff6; }
+.layout-object-state .attention { color: #ffb724; }
+.layout-object-label.danger .layout-object-state strong { color: #ff4d8d; }
+.layout-object-label.warning .layout-object-state strong { color: #ffb724; }
+.layout-object-label.muted .layout-object-state { color: #9fb4c7; }
+.layout-object-label.danger { box-shadow: 0 0 0 1px #eb0058, 0 0 12px #eb005899; }
+.layout-object-label.warning { box-shadow: 0 0 0 1px #ffb724; }
+
+.state-view-note { position: absolute; left: 22px; right: 404px; bottom: 18px; z-index: 3; width: fit-content; margin: 0 auto; padding: 7px 12px; border: 1px solid #25394d; border-radius: 3px; background: #0b1722e6; color: #a8c0d1; font: 600 10px/1.4 ui-monospace, monospace; letter-spacing: .04em; pointer-events: none; }
+[data-theme="light"] .state-view-note { border-color: #b4c6d1; background: #ffffffe8; color: #33505f; }
+@media (max-width: 720px) { .state-view-note { left: 12px; right: 12px; bottom: 232px; } }
+
+/*
   E18 ⑤ — 레이아웃 미설정·미배치 안내. 한 줄짜리 상태 문구와 달리 "무엇을 어디서 해야
   하는가"까지 말해야 하므로 세로로 쌓는다(실측 8 ZONE 중 6개에서 실제로 뜨는 화면이다).
 */

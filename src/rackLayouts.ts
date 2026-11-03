@@ -1,6 +1,9 @@
 import type {
+  FacilityMetric,
+  FacilityStatus,
   LayoutDirection,
   LayoutObject,
+  LayoutObjectAsset,
   RackAsset,
   RackSummary,
   RackUMap,
@@ -243,8 +246,10 @@ export type SceneObject = {
   id: string
   /** FMS 원값(모르는 종류도 그대로). */
   type: string
-  /** 표시명 — `label` 우선, 비었으면 `type`(§11-31 ①). 지어내지 않는다. */
+  /** 표시명 — `label` → 연결 자산 이름 → `type` 순(§11-31 ①). 지어내지 않는다. */
   label: string
+  /** 연결된 자산(E76). 있으면 이름표 아래에 상태 정보가 붙는다. */
+  asset: LayoutObjectAsset | null
   /** FMS 2D 에디터 팔레트 색. 모르는 종류는 회색. */
   color: string
   /** 박스 높이(m). RACK 만 실치수(U 수) 기반이고 나머지는 rack3d 임의값이다. */
@@ -377,10 +382,60 @@ export function objectColor(type: string): string {
   return LAYOUT_OBJECT_COLORS[type] ?? UNKNOWN_OBJECT_COLOR
 }
 
-/** 표시명 — `label` 우선, 비었으면 `type`. 둘 다 FMS 원값이다. */
+const nullableText = (value: unknown): string | null => (typeof value === 'string' && value.trim() ? value : null)
+
+/**
+ * `objects[].asset` 원값 → 연결 자산. **E76 계약(`assetId`)이 아니면 "연결 없음"이다.**
+ *
+ * E76 이전 FMS 는 이 자리에 `{id, code, ...}` 만 준다. 상태는 `assetId` 로 잇기 때문에 계약 필드가
+ * 없는 연결은 이을 수 없다. 연결 없음으로 읽으면 없는 API 를 부르지 않아 배포 순서에도 묶이지 않는다.
+ */
+export function toObjectAsset(raw: unknown): LayoutObjectAsset | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const asset = raw as Record<string, unknown>
+  if (!Number.isInteger(asset.assetId) || (asset.assetId as number) <= 0) return null
+  return {
+    assetId: asset.assetId as number,
+    name: nullableText(asset.name),
+    monitoringType: nullableText(asset.monitoringType),
+  }
+}
+
+function toFacilityMetric(raw: unknown): FacilityMetric | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const { key, value } = raw as Record<string, unknown>
+  if (typeof key !== 'string' || !key) return null
+  const known = typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
+  return { key, value: known ? value : null }
+}
+
+/**
+ * `facility-status` 응답 정규화. **배열이 아니면 `null`**(호출부가 실패로 처리한다).
+ *
+ * 이 값은 30초마다 렌더로 바로 들어간다. 렌더 중 예외는 앱 전체를 내리므로(ErrorBoundary 없음),
+ * 형식이 어긋난 항목 하나가 화면을 지우지 않도록 여기서 거른다. 등급은 대문자 enum 형태만 받는다.
+ */
+export function parseFacilityStatuses(raw: unknown): FacilityStatus[] | null {
+  if (!Array.isArray(raw)) return null
+  return raw.flatMap((item: unknown): FacilityStatus[] => {
+    if (typeof item !== 'object' || item === null) return []
+    const { assetId, severity, stale, collectedAt, metrics, commStatus } = item as Record<string, unknown>
+    if (!Number.isInteger(assetId) || (assetId as number) <= 0) return []
+    return [{
+      assetId: assetId as number,
+      severity: typeof severity === 'string' && /^[A-Z][A-Z_]*$/.test(severity) ? severity as FacilityStatus['severity'] : null,
+      stale: stale === true,
+      collectedAt: typeof collectedAt === 'string' && Number.isFinite(Date.parse(collectedAt)) ? collectedAt : null,
+      metrics: Array.isArray(metrics) ? metrics.flatMap((metric: unknown) => toFacilityMetric(metric) ?? []) : [],
+      commStatus: commStatus === 'ONLINE' || commStatus === 'STALE' || commStatus === 'OFFLINE' || commStatus === 'UNKNOWN' ? commStatus : null,
+    }]
+  })
+}
+
+/** 표시명 — `label` → 연결 자산 이름 → `type`. 전부 FMS 원값이다. */
 export function objectLabel(object: LayoutObject): string {
   const label = object.label?.trim()
-  return label ? label : object.type
+  return label ? label : toObjectAsset(object.asset)?.name ?? object.type
 }
 
 /**
@@ -503,6 +558,7 @@ export function buildZoneScene(
         id: `fms-layout-object-${object.id}`,
         type: object.type,
         label: objectLabel(object),
+        asset: toObjectAsset(object.asset),
         color: objectColor(object.type),
         heightM: objectHeightM(object),
         placement,
