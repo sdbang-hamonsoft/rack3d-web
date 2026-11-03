@@ -11,8 +11,8 @@
  */
 
 import * as THREE from 'three'
-import type { RackData, SceneObject, ServerData } from './rackLayouts'
-import type { FacilityCommStatus, FacilityMetric, FacilityStatus, LayoutObjectAsset, RackSeverity, RackSummary } from './api/types'
+import type { RackData, ServerData } from './rackLayouts'
+import type { FacilityMetric, FacilityStatus, LayoutObjectAsset, RackSeverity, RackSummary } from './api/types'
 
 /** 값이 없을 때 화면에 쓰는 표기. **null을 0으로 바꾸지 않는다**(C6). */
 export const NO_VALUE = '—'
@@ -323,103 +323,9 @@ export function severityLabel(severity: RackSeverity): string {
   return severityLabels[severity] ?? severity
 }
 
-export type FacilityTone = SeverityTone | 'stale' | 'unknown'
+// ── 장치 이름표 아래 상태 정보 (netis-fms E76) ─────────────────────────────────────
 
-/** FMS `commLabel` 과 같다. ONLINE 은 적지 않는다. */
-const commLabels = { OFFLINE: '두절', STALE: '지연', UNKNOWN: '미상' } as const
-
-/**
- * 통신 상태. `commStatus` 가 없는 이전 FMS 응답은 `stale` 로만 알 수 있어 지연·두절을 가르지 못한다
- * — 그때는 색을 정하지 않고 `LEGACY_STALE`(문구 `통신 이상`)로 둔다.
- */
-function commStatusOf(status: FacilityStatus | undefined): FacilityCommStatus | 'LEGACY_STALE' | null {
-  if (status?.commStatus) return status.commStatus
-  return status?.stale ? 'LEGACY_STALE' : null
-}
-
-export type FacilityStatusView = {
-  tone: FacilityTone
-  label: string
-  /** 경보 = 정상이 아닌 FMS 판정 또는 통신 지연·두절(FMS 카드가 강조하는 범위). 미수집·상태 없음은 판정이 없어 경보가 아니다. */
-  alarm: boolean
-}
-
-/**
- * 설비 상태 표시. **값을 받아 FMS 가 "정상"으로 판정한 경우에만 정상으로 보인다.**
- *
- * 관제 화면에서 가장 나쁜 실수는 모르는 것을 초록으로 칠하는 것이다. 그래서 응답에 없음·판정 없음·
- * 통신 이상·갱신 실패를 전부 정상과 다른 상태로 둔다. FMS 는 수집 전·비수집 자산도 `NORMAL` 로 주므로
- * (E76 계약) 수신 이력(`collectedAt`)이 없으면 `미수집` 이다. 반대로 경보는 어떤 경우에도 숨기지 않는다 —
- * 통신 이상이나 갱신 실패가 겹쳐도 마지막 경보 판정을 그대로 보여주고 사실을 덧붙인다.
- *
- * @param feedFailed `facility-status` 를 지금 못 받고 있으면 `true`(`status` 는 마지막으로 받은 값).
- */
-export function facilityStatusView(status: FacilityStatus | undefined, feedFailed: boolean): FacilityStatusView {
-  const severity = status?.severity ?? null
-  const comm = commStatusOf(status)
-  const severityAlarm = severity !== null && severity !== 'NORMAL'
-  const commAlarm = comm === 'OFFLINE' || comm === 'STALE'
-  if (severityAlarm || commAlarm) {
-    // FMS 카드와 같다 — 심각·경고·두절 빨강, 주의·지연 노랑, 겹치면 더 나쁜 쪽. 랙 표시는 경고가 노랑이라
-    // `severityTones` 를 쓰지 않는다. 모르는 등급은 노랑으로 둔다(정상처럼 보이지 않게).
-    const tone = severity === 'CRITICAL' || severity === 'MAJOR' || comm === 'OFFLINE' ? 'critical' : 'warning'
-    const parts = [
-      severityAlarm ? severityLabel(severity) : null,
-      commAlarm ? `통신 ${commLabels[comm]}` : null,
-      feedFailed ? '미갱신' : comm === 'LEGACY_STALE' ? '통신 이상' : null,
-    ].filter((part) => part !== null)
-    return { tone, label: parts.join(' · '), alarm: true }
-  }
-  if (feedFailed) return { tone: 'unknown', label: '상태 미갱신', alarm: false }
-  if (comm === 'LEGACY_STALE') return { tone: 'stale', label: '통신 이상', alarm: false }
-  if (severity === 'NORMAL') {
-    if (!status?.collectedAt) return { tone: 'unknown', label: '미수집', alarm: false }
-    return comm === 'UNKNOWN'
-      ? { tone: 'unknown', label: `통신 ${commLabels.UNKNOWN}`, alarm: false }
-      : { tone: 'normal', label: severityLabel(severity), alarm: false }
-  }
-  return { tone: 'unknown', label: '상태 없음', alarm: false }
-}
-
-/** 측정값을 항상 싣는 수집 유형(E76 계약). 이 유형인데 `metrics` 가 비었으면 권한이 없는 것이다. */
-const METRIC_MONITORING_TYPES = new Set(['TH', 'HVAC', 'UPS', 'DPM', 'LEAK', 'FIRE'])
-
-/** `metrics` 가 비었을 때의 안내. "권한 없음"과 "원래 없음"을 섞으면 운영자가 엉뚱한 곳을 찾는다. */
-export function facilityMetricsNote(monitoringType: string | null, status: FacilityStatus | undefined): string {
-  if (!status) return '받은 측정값이 없습니다.'
-  return monitoringType !== null && METRIC_MONITORING_TYPES.has(monitoringType)
-    ? '측정값을 볼 권한이 없습니다(종합관제 또는 성능 지표 조회 권한 필요).'
-    : '이 설비는 측정값을 제공하지 않습니다.'
-}
-
-// ── 시설 핀 카드 — FMS `facilityPins.ts` 와 같은 아이콘·문구 (netis-fms E76) ─────────────
-
-type FacilityMeta = { category: string | null; monitoringType: string | null }
-
-/** FMS `pinIcon` 과 같은 표. 입력이 서버 값이어도 고정 표라 임의 문자열이 아이콘 자리에 오지 않는다. */
-export function facilityPinIcon({ category, monitoringType }: FacilityMeta): string {
-  switch (monitoringType) {
-    case 'TH': return '🌡️'
-    case 'HVAC': return '❄️'
-    case 'UPS': return '🔋'
-    case 'DPM': return '⚡'
-    case 'LEAK': return '💧'
-    case 'FIRE': return '🔥'
-    case 'ACCESS': return '🚪'
-    default: break
-  }
-  switch (category) {
-    case 'CCTV': return '📹'
-    case 'NETWORK':
-    case 'SERVER': return '🗄'
-    case 'POWER': return '⚡'
-    case 'HVAC': return '❄️'
-    case 'SECURITY': return '🔒'
-    default: return '📍'
-  }
-}
-
-/** FMS 카드와 같은 문구. 값이 없는 줄은 뺀다. 출입 인원·영상 상태는 이 API 가 주지 않아 줄이 없다. */
+/** FMS 시설종합현황 핀(`facilityPins.ts`)과 같은 문구. 값이 없는 줄은 뺀다. */
 function facilityMetricLines(monitoringType: string | null, metrics: FacilityMetric[]): string[] {
   const values = new Map(metrics.map((metric) => [metric.key, metric.value]))
   const num = (key: string) => {
@@ -446,8 +352,6 @@ function facilityMetricLines(monitoringType: string | null, metrics: FacilityMet
       const humidity = num('humidity')
       const climate = [temp === null ? null : `${temp.toFixed(1)} °C`, humidity === null ? null : `${humidity.toFixed(1)} %`].filter((item) => item !== null)
       if (climate.length > 0) lines.push(climate.join(' / '))
-      const alarms = metrics.filter((metric) => metric.key.startsWith('alm_') && metric.value === true).length
-      if (alarms > 0) lines.push(`접점 경보 ${alarms}건`)
       return lines
     }
     case 'UPS': {
@@ -470,114 +374,65 @@ function facilityMetricLines(monitoringType: string | null, metrics: FacilityMet
   }
 }
 
-export type FacilityPinTone = 'danger' | 'warning' | 'normal' | 'stale' | 'muted'
+/** FMS `commLabel` 과 같다. ONLINE 은 적지 않는다. `commStatus` 가 없는 응답은 `stale` 로만 안다. */
+function facilityCommLine(status: FacilityStatus | undefined): string | null {
+  switch (status?.commStatus) {
+    case 'OFFLINE': return '통신: 두절'
+    case 'STALE': return '통신: 지연'
+    case 'UNKNOWN': return '통신: 미상'
+    case 'ONLINE': return null
+    default: return status?.stale ? '통신: 이상' : null
+  }
+}
 
-export type FacilityPinCard = {
-  icon: string
-  tone: FacilityPinTone
-  /** `⚠️ [경보] ` 처럼 제목 앞에 붙는 글자. 평상시에는 빈 문자열이다. */
-  prefix: string
+export type FacilityLabelTone = 'danger' | 'warning' | 'normal' | 'muted'
+
+export type FacilityLabelStatus = {
+  tone: FacilityLabelTone
   lines: string[]
 }
 
-/** 카드 제목. 자산 id 는 화면에 내지 않는다. */
-export function facilityPinTitle(name: string | null | undefined, assetCode: string | null | undefined): string {
-  return name ?? assetCode ?? '이름 없는 설비'
-}
-
 /**
- * 핀 카드. 등급 색은 FMS 카드와 같다(CRITICAL·MAJOR 빨강, CAUTION 노랑).
+ * 이름표 아래 상태 정보. 색은 FMS 핀과 같다(심각·경고·두절 빨강, 주의·지연 노랑, 겹치면 더 나쁜 쪽).
  *
- * **FMS 카드와 다른 점이 하나 있다.** FMS 는 판정을 모르면 평상시와 같은 시안으로 그리는데, 여기서는
- * 상태 없음·미수집·미갱신을 흐리게 하고 글로 밝힌다 — {@link facilityStatusView} 의 규칙이다.
- */
-export function facilityPinCard(meta: FacilityMeta, status: FacilityStatus | undefined, view: FacilityStatusView): FacilityPinCard {
-  const comm = commStatusOf(status)
-  let tone: FacilityPinTone = 'normal'
-  if (view.alarm) tone = view.tone === 'critical' ? 'danger' : 'warning'
-  else if (view.tone === 'stale') tone = 'stale'
-  else if (view.tone === 'unknown') tone = 'muted'
-
-  const lines = facilityMetricLines(meta.monitoringType, status?.metrics ?? [])
-  if (view.label.endsWith('미갱신')) {
-    // 빨간 카드에 이유가 빠지지 않게 마지막으로 받은 통신 상태도 적는다.
-    if (comm === 'OFFLINE' || comm === 'STALE') lines.push(`통신: ${commLabels[comm]}`)
-    lines.push('상태 미갱신')
-  }
-  else if (view.label === '미수집' || view.label === '상태 없음') lines.push(view.label)
-  else if (comm === 'LEGACY_STALE') lines.push('통신: 이상')
-  else if (comm && comm !== 'ONLINE') lines.push(`통신: ${commLabels[comm]}`)
-
-  const prefix = tone === 'danger' ? '⚠️ [경보] ' : tone === 'warning' ? '⚠️ [주의] ' : ''
-  return { icon: facilityPinIcon(meta), tone, prefix, lines }
-}
-
-export type FacilityAlarm = {
-  key: string
-  label: string
-  /** 이 항목이 묶고 있는 경보 수. 3D 에 자리가 없고 이름도 모르는 자산은 한 줄로 묶는다. */
-  count: number
-  view: FacilityStatusView
-  /** 3D 에 있으면 그 자산. `null` 이면 그릴 곳이 없어 눌러도 갈 곳이 없다. */
-  assetId: number | null
-}
-
-/**
- * 경보 순서. 톤으로 정렬하면 MAJOR 와 CAUTION 이 같아 MAJOR 가 뒤로 밀린다. 모르는 등급은 MAJOR 와 같이 둔다.
- * 두절은 FMS 카드가 빨강으로 그리는 만큼 경고와 같은 자리, 지연은 주의와 같은 자리다.
- */
-const facilityAlarmRank = (status: FacilityStatus | undefined): number => {
-  const severity = status?.severity
-  if (severity === 'CRITICAL') return 0
-  if (status?.commStatus === 'OFFLINE') return 1
-  return severity === 'CAUTION' || severity === 'NORMAL' || severity === null || severity === undefined ? 2 : 1
-}
-
-/**
- * 경보 목록. **3D 에 그려진 것만 세지 않는다.** 그리드 밖 좌표이거나 레이아웃이 없는 ZONE 의 자산처럼
- * 자리가 없는 경보를 버리면 심각 경보가 씬·상단바 어디에도 없이 사라진다(배치되지 않은 랙을 조용히
- * 빼지 않는 것과 같은 규칙이다). 이름을 모르는 자산은 id 를 화면에 내지 않고 한 줄로 묶는다.
+ * **값을 받아 FMS 가 정상으로 판정한 경우에만 `상태: 정상` 이다.** FMS 는 수집 전·비수집 자산도 `NORMAL` 로
+ * 주므로 수신 이력이 없으면 `미수집` 이다. 측정값 권한이 없어 `metrics` 가 비어도 판정은 항상 보인다.
  *
- * @param pinnedAssetIds 대략 위치로 씬에 그려진 핀 자산.
+ * @param feedFailed `facility-status` 를 지금 못 받고 있으면 `true`(`status` 는 마지막으로 받은 값).
  */
-export function collectFacilityAlarms(
-  objects: SceneObject[],
-  unplacedAssets: LayoutObjectAsset[],
-  statuses: Map<number, FacilityStatus>,
-  pinnedAssetIds: Set<number>,
-  feedFailed: boolean,
-): FacilityAlarm[] {
-  const alarms: { alarm: FacilityAlarm; rank: number }[] = []
-  const shown = new Set<number>()
-  objects.forEach((object) => {
-    if (!object.asset) return
-    const assetId = object.asset.assetId
-    shown.add(assetId)
-    const status = statuses.get(assetId)
-    const view = facilityStatusView(status, feedFailed)
-    if (view.alarm) alarms.push({ alarm: { key: object.id, label: facilityPinTitle(object.asset.name ?? object.label, null), count: 1, view, assetId }, rank: facilityAlarmRank(status) })
-  })
-  const unplacedNames = new Map(unplacedAssets.map((asset) => [asset.assetId, asset.name]))
-  const unnamed: { view: FacilityStatusView; rank: number }[] = []
-  statuses.forEach((status, assetId) => {
-    if (shown.has(assetId)) return
-    const view = facilityStatusView(status, feedFailed)
-    if (!view.alarm) return
-    const rank = facilityAlarmRank(status)
-    const name = status.name ?? unplacedNames.get(assetId) ?? status.assetCode
-    if (pinnedAssetIds.has(assetId)) {
-      alarms.push({ alarm: { key: `asset-${assetId}`, label: facilityPinTitle(name, null), count: 1, view, assetId }, rank })
-    } else if (name) {
-      alarms.push({ alarm: { key: `asset-${assetId}`, label: `${name} (3D 미배치)`, count: 1, view, assetId: null }, rank })
-    } else {
-      unnamed.push({ view, rank })
-    }
-  })
-  if (unnamed.length > 0) {
-    const worst = unnamed.reduce((a, b) => (b.rank < a.rank ? b : a))
-    alarms.push({ alarm: { key: 'unlinked-assets', label: `3D 미연결 설비 ${unnamed.length}건`, count: unnamed.length, view: worst.view, assetId: null }, rank: worst.rank })
+export function facilityLabelStatus(asset: LayoutObjectAsset, status: FacilityStatus | undefined, feedFailed: boolean): FacilityLabelStatus {
+  if (!status) return { tone: 'muted', lines: [feedFailed ? '상태 미갱신' : '상태 없음'] }
+
+  const { severity, commStatus: comm, collectedAt } = status
+  const severityAlarm = severity !== null && severity !== 'NORMAL'
+  const commLine = facilityCommLine(status)
+
+  let tone: FacilityLabelTone = 'normal'
+  if (severity === 'CRITICAL' || severity === 'MAJOR' || comm === 'OFFLINE') tone = 'danger'
+  else if (severityAlarm || comm === 'STALE') tone = 'warning'
+  else if (feedFailed || severity === null || !collectedAt || commLine !== null) tone = 'muted'
+
+  // 켜진 접점은 경보다(E76 계약). 누수·화재 감지는 자기 줄이 있어 건수에서 뺀다.
+  const activeContacts = status.metrics.filter((metric) => metric.value === true && metric.key !== 'run_state')
+  const contactAlarms = activeContacts.filter((metric) => metric.key !== 'leak_detected' && metric.key !== 'fire_detected').length
+  if (tone !== 'danger' && activeContacts.length > 0) tone = 'warning'
+
+  let lines = facilityMetricLines(asset.monitoringType, status.metrics)
+  // `상태: 정상` 은 접점 하나만 본 말이라, 다른 경보나 통신 이상과 함께 두면 거짓이 된다.
+  const commProblem = comm === 'OFFLINE' || comm === 'STALE' || (comm === null && status.stale)
+  if (severityAlarm || commProblem || activeContacts.length > 0) lines = lines.filter((line) => line !== '상태: 정상')
+  if (contactAlarms > 0) lines.push(`접점 경보 ${contactAlarms}건`)
+  // 측정값과 별개로 FMS 판정을 적는다 — 측정값 권한이 없는 계정도 경보는 봐야 한다.
+  if (severityAlarm) lines.unshift(`판정: ${severityLabel(severity)}`)
+  else if (lines.length === 0) {
+    if (severity === null) lines.push('상태 없음')
+    else if (!collectedAt) lines.push('미수집')
+    else if (commLine === null) lines.push(`상태: ${severityLabel(severity)}`)
   }
-  return alarms.sort((a, b) => a.rank - b.rank).map(({ alarm }) => alarm)
+  // 비수집 자산의 "미상"은 `미수집` 과 같은 말이라 또 적지 않는다.
+  if (commLine !== null && (comm !== 'UNKNOWN' || collectedAt)) lines.push(commLine)
+  if (feedFailed) lines.push('상태 미갱신')
+  return { tone, lines }
 }
 
 /** 랙 경보 3D 표시·범례가 함께 쓰는 색. 한 화면에서 색과 범례가 어긋나지 않게 한 곳에 둔다. */

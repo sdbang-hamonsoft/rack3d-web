@@ -1,8 +1,8 @@
 import type {
-  LayoutDirection,
-  LayoutObject,
   FacilityMetric,
   FacilityStatus,
+  LayoutDirection,
+  LayoutObject,
   LayoutObjectAsset,
   RackAsset,
   RackSummary,
@@ -248,7 +248,7 @@ export type SceneObject = {
   type: string
   /** 표시명 — `label` → 연결 자산 이름 → `type` 순(§11-31 ①). 지어내지 않는다. */
   label: string
-  /** 연결된 자산(E76). 있으면 상태 표시·클릭 상세가 붙고, `null` 이면 지금까지처럼 표지만 그린다. */
+  /** 연결된 자산(E76). 있으면 이름표 아래에 상태 정보가 붙는다. */
   asset: LayoutObjectAsset | null
   /** FMS 2D 에디터 팔레트 색. 모르는 종류는 회색. */
   color: string
@@ -265,8 +265,6 @@ export type ZoneScene = {
   racks: RackData[]
   /** 랙이 아닌(또는 페어링되지 않은) 배치 오브젝트. */
   objects: SceneObject[]
-  /** 자산이 연결됐는데 좌표가 그리드 밖이라 그리지 못한 것. 그려지지 않아도 경보는 알려야 한다. */
-  unplacedFacilityAssets: LayoutObjectAsset[]
 }
 
 /**
@@ -390,7 +388,7 @@ const nullableText = (value: unknown): string | null => (typeof value === 'strin
  * `objects[].asset` 원값 → 연결 자산. **E76 계약(`assetId`)이 아니면 "연결 없음"이다.**
  *
  * E76 이전 FMS 는 이 자리에 `{id, code, ...}` 만 준다. 상태는 `assetId` 로 잇기 때문에 계약 필드가
- * 없는 연결은 이을 수 없고, 칩을 달아도 "상태 없음"뿐이라 연결 없음으로 둔다.
+ * 없는 연결은 이을 수 없다. 연결 없음으로 읽으면 없는 API 를 부르지 않아 배포 순서에도 묶이지 않는다.
  */
 export function toObjectAsset(raw: unknown): LayoutObjectAsset | null {
   if (typeof raw !== 'object' || raw === null) return null
@@ -398,42 +396,30 @@ export function toObjectAsset(raw: unknown): LayoutObjectAsset | null {
   if (!Number.isInteger(asset.assetId) || (asset.assetId as number) <= 0) return null
   return {
     assetId: asset.assetId as number,
-    assetCode: nullableText(asset.assetCode),
     name: nullableText(asset.name),
-    category: nullableText(asset.category),
     monitoringType: nullableText(asset.monitoringType),
   }
 }
 
 function toFacilityMetric(raw: unknown): FacilityMetric | null {
   if (typeof raw !== 'object' || raw === null) return null
-  const { key, name, value, unit } = raw as Record<string, unknown>
+  const { key, value } = raw as Record<string, unknown>
   if (typeof key !== 'string' || !key) return null
   const known = typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
-  return { key, name: nullableText(name), value: known ? value : null, unit: nullableText(unit) }
-}
-
-function toFacilityPin(raw: unknown): FacilityStatus['pin'] {
-  if (typeof raw !== 'object' || raw === null) return null
-  const { x, y } = raw as Record<string, unknown>
-  if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) return null
-  const clamp = (value: number) => Math.max(0, Math.min(1, value))
-  return { x: clamp(x), y: clamp(y) }
+  return { key, value: known ? value : null }
 }
 
 /**
  * `facility-status` 응답 정규화. **배열이 아니면 `null`**(호출부가 실패로 처리한다).
  *
  * 이 값은 30초마다 렌더로 바로 들어간다. 렌더 중 예외는 앱 전체를 내리므로(ErrorBoundary 없음),
- * 형식이 어긋난 항목 하나가 화면을 지우지 않도록 여기서 거른다. 그리고 200 인데 모양이 다른 응답을
- * 빈 목록으로 받으면 전 설비가 "상태 없음 · LIVE"로 보여 경보를 놓친다 — 그래서 실패로 돌린다.
- * 등급은 대문자 enum 형태만 받는다. 새 등급은 통과시키고 객체·임의 문자열은 판정 없음으로 둔다.
+ * 형식이 어긋난 항목 하나가 화면을 지우지 않도록 여기서 거른다. 등급은 대문자 enum 형태만 받는다.
  */
 export function parseFacilityStatuses(raw: unknown): FacilityStatus[] | null {
   if (!Array.isArray(raw)) return null
   return raw.flatMap((item: unknown): FacilityStatus[] => {
     if (typeof item !== 'object' || item === null) return []
-    const { assetId, severity, stale, collectedAt, metrics, name, assetCode, category, monitoringType, pin, layoutLinked, commStatus } = item as Record<string, unknown>
+    const { assetId, severity, stale, collectedAt, metrics, commStatus } = item as Record<string, unknown>
     if (!Number.isInteger(assetId) || (assetId as number) <= 0) return []
     return [{
       assetId: assetId as number,
@@ -441,89 +427,9 @@ export function parseFacilityStatuses(raw: unknown): FacilityStatus[] | null {
       stale: stale === true,
       collectedAt: typeof collectedAt === 'string' && Number.isFinite(Date.parse(collectedAt)) ? collectedAt : null,
       metrics: Array.isArray(metrics) ? metrics.flatMap((metric: unknown) => toFacilityMetric(metric) ?? []) : [],
-      name: nullableText(name),
-      assetCode: nullableText(assetCode),
-      category: nullableText(category),
-      monitoringType: nullableText(monitoringType),
-      pin: toFacilityPin(pin),
-      layoutLinked: typeof layoutLinked === 'boolean' ? layoutLinked : null,
       commStatus: commStatus === 'ONLINE' || commStatus === 'STALE' || commStatus === 'OFFLINE' || commStatus === 'UNKNOWN' ? commStatus : null,
     }]
   })
-}
-
-/** 배경 핀 좌표를 옮겨 놓은 자리. 측정값이 아니라 **대략 위치**다. */
-export type ApproximatePin = {
-  assetId: number
-  /** 씬 좌표(m). 칸 중심이 `index * tileSize` 다. */
-  worldX: number
-  worldZ: number
-}
-
-/** 같은 칸에 대략 위치 핀이 여럿일 때 벌리는 반지름(칸 한 변 기준). */
-const SHARED_TILE_SPREAD = 0.3
-
-/**
- * 3D 오브젝트가 없는 핀 자산의 대략 자리.
- *
- * **칸은 FMS 편집기의 칸 제안(`suggestCell`)과 같은 식이다**(E76 §2-1) — 운영자가 제안 칸을 그대로
- * 확정해도 3D 자리가 튀지 않는다. 같은 칸에 몰린 핀은 칸 안에서 벌린다.
- *
- * **판단 기준은 `layoutLinked` 가 아니라 지금 그려진 씬이다.** 배치는 진입 시 1회만 받고 상태는 30초마다
- * 받으므로 둘이 어긋날 수 있다. 플래그를 따르면 편집기에서 막 연결한 핀이 오브젝트 없이 사라지거나
- * 오브젝트와 핀에 두 번 그려진다. 씬 기준이면 한 자산은 항상 한 자리에만 나온다.
- */
-export function collectApproximatePins(
-  objects: SceneObject[],
-  statuses: Iterable<FacilityStatus>,
-  grid: SceneGrid | null,
-): ApproximatePin[] {
-  if (!grid) return []
-  const drawn = new Set(objects.flatMap((object) => (object.asset ? [object.asset.assetId] : [])))
-  const byTile = new Map<string, { assetId: number; col: number; row: number }[]>()
-  for (const status of statuses) {
-    if (!status.pin || drawn.has(status.assetId)) continue
-    const col = Math.min(grid.cols - 1, Math.floor(status.pin.x * grid.cols))
-    const row = Math.min(grid.rows - 1, Math.floor(status.pin.y * grid.rows))
-    const key = `${col},${row}`
-    byTile.set(key, [...(byTile.get(key) ?? []), { assetId: status.assetId, col, row }])
-  }
-  return [...byTile.values()].flatMap((tile) => {
-    // 응답 순서가 바뀌어도 폴링마다 자리가 뒤섞이지 않게 자산 id 로 정렬한다.
-    const sorted = [...tile].sort((a, b) => a.assetId - b.assetId)
-    return sorted.map(({ assetId, col, row }, index) => {
-      const angle = (index / sorted.length) * Math.PI * 2
-      const spread = sorted.length > 1 ? SHARED_TILE_SPREAD * grid.tileSize : 0
-      return {
-        assetId,
-        worldX: col * grid.tileSize + Math.cos(angle) * spread,
-        worldZ: row * grid.tileSize + Math.sin(angle) * spread,
-      }
-    })
-  })
-}
-
-/**
- * 배치가 낡았을 때 나타나는 자산. 상태 응답의 연결 여부와 지금 그린 씬이 다르면 편집기에서 연결이 바뀐 것이다.
- *
- * 값이 같은 동안 다시 묻지 않도록 호출부는 이 문자열이 **바뀔 때만** 배치를 다시 받는다. 다시 받아도 어긋나면
- * (FMS 쪽 불일치) 문자열이 그대로라 반복하지 않는다. 다른 칸으로 옮긴 것은 이 값으로 알 수 없다(E76 §3).
- */
-export function layoutLinkMismatchKey(
-  objects: SceneObject[],
-  unplacedAssets: LayoutObjectAsset[],
-  statuses: Iterable<FacilityStatus>,
-): string {
-  const inLayout = new Set([
-    ...objects.flatMap((object) => (object.asset ? [object.asset.assetId] : [])),
-    ...unplacedAssets.map((asset) => asset.assetId),
-  ])
-  const mismatched: number[] = []
-  for (const status of statuses) {
-    if (status.layoutLinked === null) continue
-    if (status.layoutLinked !== inLayout.has(status.assetId)) mismatched.push(status.assetId)
-  }
-  return mismatched.sort((a, b) => a - b).join(',')
 }
 
 /** 표시명 — `label` → 연결 자산 이름 → `type`. 전부 FMS 원값이다. */
@@ -630,7 +536,6 @@ export function buildZoneScene(
   /** locationId → 배치. 같은 랙을 가리키는 오브젝트가 둘이면 먼저 온 것만 랙에 붙인다. */
   const placementByLocationId = new Map<number, ScenePlacement>()
   const objects: SceneObject[] = []
-  const unplacedFacilityAssets: LayoutObjectAsset[] = []
   /**
    * 랙 목록을 아직 못 받았으면 `null` — 그때는 "페어링 불가"로 **단정하지 않는다.**
    * 단정하면 랙 목록이 도착하기 전까지 모든 랙이 박스로 그려졌다가 뒤집히는 깜빡임이 된다.
@@ -640,11 +545,7 @@ export function buildZoneScene(
   if (grid) {
     layout?.objects.forEach((object) => {
       const placement = toPlacement(object, grid)
-      if (!placement) {
-        const asset = toObjectAsset(object.asset)
-        if (asset) unplacedFacilityAssets.push(asset)
-        return
-      }
+      if (!placement) return
       const locationId = object.type === 'RACK' ? object.rack?.locationId ?? null : null
       const pairable = locationId !== null
         && (knownLocationIds === null || knownLocationIds.has(locationId))
@@ -677,7 +578,7 @@ export function buildZoneScene(
     }
   })
 
-  return { grid, racks, objects, unplacedFacilityAssets }
+  return { grid, racks, objects }
 }
 
 // ── 씬 랙 객체 신원 유지 ─────────────────────────────────────────────────────

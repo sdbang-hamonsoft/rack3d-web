@@ -234,7 +234,7 @@ export type LayoutObject = {
   label: string
   rack: LayoutObjectRack | null
   /**
-   * 연결된 자산(E76 계약 `LayoutObjectAsset`). 연결이 없으면 `null`.
+   * 연결된 자산(netis-fms E76). 연결이 없으면 `null`.
    *
    * ⚠️ E76 이전 FMS 는 같은 자리에 `{id, code, ...}` 를 준다 — 타입을 믿지 말고
    * `toObjectAsset` 을 거쳐 읽는다. 그 형태는 "연결 없음"으로 취급된다.
@@ -242,55 +242,37 @@ export type LayoutObject = {
   asset: unknown
 }
 
-/** `objects[].asset` — 시설 핀 자산과 3D 오브젝트의 연결(netis-fms E76). */
+/** `objects[].asset` — 3D 오브젝트에 연결된 자산(E76). */
 export type LayoutObjectAsset = {
   assetId: number
-  assetCode: string | null
   name: string | null
-  category: string | null
   monitoringType: string | null
 }
 
-/** 설비 계측값 1건. `value` 는 FMS 원값이고, 없으면 `null` 이다(0·false 로 치환 금지, C6). */
+/** 설비 측정값 1건. `value` 는 FMS 원값이고, 없으면 `null` 이다(0·false 로 치환 금지, C6). */
 export type FacilityMetric = {
   key: string
-  /** FMS 지표 사전의 표시명. 화면에는 `key` 가 아니라 이것을 쓴다. */
-  name: string | null
-  /** NUMERIC = 숫자, 접점 = true/false, TEXT = 문자열. */
   value: number | boolean | string | null
-  unit: string | null
 }
 
 export type FacilityCommStatus = 'ONLINE' | 'STALE' | 'OFFLINE' | 'UNKNOWN'
 
 /**
- * `GET /api/zones/{zoneId}/facility-status` 의 원소(ASSET READ, netis-fms E76).
+ * `GET /api/zones/{zoneId}/facility-status` 의 원소(ASSET READ, 계약: netis-fms `docs/E76-rack3d-facility-status-api.md`).
  *
- * `severity` 는 **FMS 판정**이다 — rack3d 가 계측값으로 다시 판정하지 않는다.
+ * `severity` 는 **FMS 판정**이다 — rack3d 가 측정값으로 다시 판정하지 않는다.
  *
- * ⚠️ **수집 전·비수집 자산도 `NORMAL` 로 온다**(E76 계약). 그래서 `collectedAt` 이 `null` 이면
- * NORMAL 이어도 정상으로 그리지 않는다 — {@link facilityStatusView}.
- *
- * `metrics` 는 호출자에게 DASHBOARD 또는 PERFORMANCE 조회 권한이 있을 때만 채워진다.
- * 대상 자산에는 3D 오브젝트가 없는 배경 핀 자산도 섞여 있다.
+ * ⚠️ **수집 전·비수집 자산도 `NORMAL` 로 온다.** 그래서 `collectedAt` 이 `null` 이면 NORMAL 이어도
+ * 정상으로 표시하지 않는다. `metrics` 는 호출자에게 DASHBOARD 또는 PERFORMANCE 조회 권한이 있을 때만 채워진다.
+ * 응답에는 3D 오브젝트가 없는 배경 핀 자산도 섞여 있는데, rack3d 는 연결된 오브젝트의 것만 쓴다.
  */
 export type FacilityStatus = {
   assetId: number
   severity: RackSeverity | null
-  /** 통신 이상 — 수신 지연 또는 두절(FMS 판정). */
+  /** 통신 이상 — 수신 지연 또는 두절(FMS 판정). `commStatus` 가 없는 응답의 대체 근거다. */
   stale: boolean
   collectedAt: string | null
   metrics: FacilityMetric[]
-  /** 핀 카드의 아이콘·제목용. E76 1차 FMS 는 주지 않는다 — 없으면 전부 `null`. */
-  name: string | null
-  assetCode: string | null
-  category: string | null
-  monitoringType: string | null
-  /** 시설종합현황 배경 그림 기준 0~1 비율. 평면도 좌표가 아니므로 3D 에는 "대략 위치"로만 쓴다. */
-  pin: { x: number; y: number } | null
-  /** 그 ZONE 레이아웃 오브젝트에 연결됐는가. 그리는 자리는 씬이 정하고, 이 값은 배치가 낡았는지 볼 때만 쓴다. */
-  layoutLinked: boolean | null
-  /** 통신 상태 원값(E76b). 이전 FMS 는 주지 않아 `null` 이고, 그때는 `stale` 만으로 판단한다. */
   commStatus: FacilityCommStatus | null
 }
 

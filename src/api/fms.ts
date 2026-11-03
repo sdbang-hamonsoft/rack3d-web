@@ -86,9 +86,9 @@ export function fetchZoneLayout(zoneId: number): Promise<ZoneLayout> {
 }
 
 /**
- * `GET /api/zones/{zoneId}/facility-status` — ZONE 시설 핀의 상태 (ASSET READ, netis-fms E76).
+ * `GET /api/zones/{zoneId}/facility-status` — 장치 이름표 아래 상태 정보 (ASSET READ, netis-fms E76).
  *
- * 스코프 밖·없는 ZONE 은 `404`. 값이 바뀌는 데이터라 랙 목록과 같은 30초 폴링으로 받는다.
+ * 값이 바뀌는 데이터라 랙 목록과 같은 30초 폴링으로 받는다. 스코프 밖·없는 ZONE 은 `404`.
  *
  * C5 신뢰 경계: `zoneId`는 **sidebar 응답이 준 id만** 넘긴다.
  */

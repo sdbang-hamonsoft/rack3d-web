@@ -198,7 +198,7 @@ const layoutObject = (o) => withFacilityAssets({ dir: 'NORTH', label: '', rack: 
 /**
  * 시설 핀 자산 연결(netis-fms E76, 계약: 그 저장소 `docs/E76-rack3d-facility-status-api.md`). 레이아웃 오브젝트 id → 자산.
  * `SCENARIO=facility-legacy` 는 E76 이전 FMS 재현이다 — `{id, code}` 형태라 연결 없음으로 읽혀야 하고
- * `facility-status` 는 404 라 상단에 `설비 상태 미갱신` 이 뜬다(FMS 를 먼저 배포해야 하는 이유).
+ * `facility-status` 호출이 한 건도 나가지 않아야 한다.
  */
 const facilityAsset = (assetId, assetCode, name, category, monitoringType) => ({
   assetId, assetCode, name, category, monitoringType,
@@ -210,7 +210,7 @@ const facilityAssetByObjectId = {
   7: facilityAsset(9007, 'UPS-01', 'UPS #1', 'POWER', 'UPS'),
   9: facilityAsset(9009, 'TH-01', '온습도 센서 #1', 'SENSOR', 'TH'),
   10: facilityAsset(9010, 'DOOR-01', '방화문', 'SECURITY', 'ACCESS'),
-  15: facilityAsset(9015, 'LEAK-01', '누수감지 #1', 'SENSOR', 'LEAK'),
+  15: facilityAsset(9015, 'LEAK-01', '3F 누수 감지 센서 케이블', 'SENSOR', 'LEAK'),
   16: facilityAsset(9016, 'CCTV-01', 'CCTV #1', 'CCTV', null),
   18: facilityAsset(9018, 'FIRE-01', '화재감지 #1', 'SENSOR', 'FIRE'),
 }
@@ -229,14 +229,12 @@ const pinOnlyMeta = {
   9102: { assetCode: 'TH-08', name: '온습도 센서 #8', category: 'SENSOR', monitoringType: 'TH' },
 }
 const facilityComm = { 9007: 'STALE', 9009: 'OFFLINE', 9016: 'UNKNOWN', 9101: 'UNKNOWN' }
-let facilityPolls = 0
 const facilityStatuses = () => facilityStatusRows().map((row) => {
   const { assetCode, name, category, monitoringType } = facilityMeta[row.assetId] ?? pinOnlyMeta[row.assetId]
   return {
     assetCode, name, category, monitoringType,
     pin: facilityPins[row.assetId] ?? null,
-    // `facility-link-change`: 첫 응답 뒤 편집기에서 연결한 상태 — 배치를 다시 받되 반복하지 않아야 한다.
-    layoutLinked: row.assetId in facilityMeta || (SCENARIO === 'facility-link-change' && row.assetId === 9100 && facilityPolls > 1),
+    layoutLinked: row.assetId in facilityMeta,
     commStatus: facilityComm[row.assetId] ?? 'ONLINE',
     ...row,
   }
@@ -389,7 +387,6 @@ createServer((req, res) => {
   }
   // ZONE 시설 상태(netis-fms E76). 없는 ZONE 은 404.
   if (req.url === '/api/zones/101/facility-status') {
-    facilityPolls += 1
     if (SCENARIO === 'facility-fail') return json(500, { code: 'INTERNAL_ERROR', message: '실패' })
     if (SCENARIO === 'facility-legacy') return json(404, { code: 'NOT_FOUND', message: '없음' })
     // DASHBOARD·PERFORMANCE 조회 권한 없는 계정 — 수집 유형이면 "권한 없음", 아니면 "제공하지 않음" 안내.
@@ -399,16 +396,6 @@ createServer((req, res) => {
     // 깨진 항목이 섞였다 — 앱이 내려가지 않아야 하고 멀쩡한 항목은 그대로 나와야 한다.
     if (SCENARIO === 'facility-malformed') {
       return json(200, [null, 7, { assetId: 'x' }, { assetId: 9015, severity: { a: 1 }, metrics: [null, { key: 'leak_detected', name: '누수감지', value: { b: 2 } }] }, ...facilityStatuses().filter((s) => s.assetId !== 9015)])
-    }
-    // 3D 에 없는 자산의 경보(9999) + 등급 정렬(주의 다수 뒤의 경고가 앞으로 와야 한다).
-    if (SCENARIO === 'facility-orphan') {
-      return json(200, [
-        ...[9006, 9009, 9010, 9016, 9018].map((assetId) => ({ assetId, severity: 'CAUTION', stale: false, collectedAt: collectedAt(), metrics: [] })),
-        { assetId: 9007, severity: 'MAJOR', stale: false, collectedAt: collectedAt(), metrics: [] },
-        { assetId: 9015, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [] },
-        { assetId: 9998, severity: 'CAUTION', stale: false, collectedAt: collectedAt(), metrics: [] },
-        { assetId: 9999, severity: 'CRITICAL', stale: false, collectedAt: collectedAt(), metrics: [] },
-      ])
     }
     return json(200, facilityStatuses())
   }

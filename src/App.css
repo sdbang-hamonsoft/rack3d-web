@@ -960,69 +960,29 @@ kbd { font-size: 13px; }
 .layout-object-label i { width: 7px; height: 7px; border-radius: 1px; }
 [data-theme="light"] .layout-object-label { background: #ffffffe8; color: #23394a; }
 
-/*
-  E76 — 시설 핀 카드. FMS 시설종합현황 `.sensor-pin` 과 같은 모양이다(아이콘 34px·카드 11px·색·펄스).
-  3D 화면의 라이트 테마에서도 카드는 어두운 채로 둔다: FMS 카드가 그렇고, 밝은 바닥 위에서 더 잘 읽힌다.
-  카드 본문은 클릭을 받지 않는다(시점 드래그를 막지 않게). 아이콘만 받는다.
-*/
-.facility-pin { display: flex; flex-direction: column; align-items: center; color: #fff; pointer-events: none; }
-.facility-pin-icon { pointer-events: auto; width: 34px; height: 34px; display: flex; justify-content: center; align-items: center; padding: 0; border: 2px solid var(--pin-color); border-radius: 50%; background: #0a192ff2; color: #fff; font-size: 15px; line-height: 1; box-shadow: 0 0 10px var(--pin-color); cursor: pointer; transition: transform .1s ease; }
-.facility-pin-icon:hover { transform: scale(1.12); }
-.facility-pin-icon:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
-.facility-pin-details { margin-top: 6px; padding: 6px 10px; border: 1px solid #2a3f63; border-radius: 6px; background: #061223eb; box-shadow: 0 0 12px #5089ef4d; color: #fff; font-size: 11px; line-height: 1.5; text-align: center; white-space: nowrap; pointer-events: none; user-select: none; }
-.facility-pin-details strong { display: block; }
-.facility-pin-details em { display: block; color: #9fb4c7; font-size: 10px; font-style: normal; }
-.facility-pin { --pin-color: #5089ef; }
-.facility-pin.danger { --pin-color: #eb0058; }
-.facility-pin.warning { --pin-color: #ffb724; }
-.facility-pin.stale { --pin-color: #c49bff; }
-.facility-pin.muted { --pin-color: #7d90a1; }
-.facility-pin.danger strong { color: #ff4d8d; }
-.facility-pin.warning strong { color: #ffb724; }
-.facility-pin.muted .facility-pin-icon { box-shadow: none; opacity: .85; }
-.facility-pin.muted .facility-pin-details { color: #b6c6d3; }
-.facility-pin.stale .facility-pin-details { color: #e3d6ff; }
-.facility-pin.danger .facility-pin-icon { animation: facility-pin-pulse-red 1.2s infinite ease-in-out; }
-.facility-pin.warning .facility-pin-icon { animation: facility-pin-pulse-yellow 1.5s infinite ease-in-out; }
-.facility-pin.approximate .facility-pin-details { border-style: dashed; opacity: .92; }
-.facility-pin.approximate .facility-pin-icon { border-style: dashed; }
-.facility-pin.selected .facility-pin-details { border-color: #62c9f2; box-shadow: 0 0 0 1px #62c9f2; }
-.facility-pin.selected .facility-pin-icon { outline: 2px solid #62c9f2; outline-offset: 2px; }
-@keyframes facility-pin-pulse-red { 0% { box-shadow: 0 0 0 0 #eb0058cc; } 70% { box-shadow: 0 0 0 14px #eb005800; } 100% { box-shadow: 0 0 0 0 #eb005800; } }
-@keyframes facility-pin-pulse-yellow { 0% { box-shadow: 0 0 0 0 #ffb724cc; } 70% { box-shadow: 0 0 0 12px #ffb72400; } 100% { box-shadow: 0 0 0 0 #ffb72400; } }
-@media (prefers-reduced-motion: reduce) { .facility-pin .facility-pin-icon { animation: none; } }
+/* E76 — 장치 이름 아래 상태 정보. 칩 테두리·점(팔레트 색)은 그대로 두고 상태는 글로 말한다. */
+.layout-object-name { display: flex; align-items: center; gap: 6px; }
+.layout-object-label.has-status { flex-direction: column; align-items: flex-start; gap: 2px; }
+.layout-object-label small, .layout-object-label b { display: block; font: 600 8px/1.35 ui-monospace, monospace; letter-spacing: .02em; }
+.layout-object-label small { color: #9fb4c7; }
+.layout-object-label b { color: #d8e6f0; }
+.layout-object-label.danger b { color: #ff4d8d; }
+.layout-object-label.warning b { color: #ffb724; }
+.layout-object-label.muted b { color: #8fa6b7; }
+.layout-object-label.danger { box-shadow: 0 0 0 1px #eb0058, 0 0 12px #eb005899; }
+.layout-object-label.warning { box-shadow: 0 0 0 1px #ffb724; }
+[data-theme="light"] .layout-object-label small { color: #52687a; }
+[data-theme="light"] .layout-object-label b { color: #23394a; }
+[data-theme="light"] .layout-object-label.danger b { color: #c0243a; }
+[data-theme="light"] .layout-object-label.warning b { color: #8a5c00; }
+[data-theme="light"] .layout-object-label.muted b { color: #52687a; }
 
-.facility-pin-toggle { position: absolute; left: 22px; bottom: 18px; z-index: 3; padding: 7px 10px; border: 1px solid #25394d; border-radius: 3px; background: #0b1722e6; color: #a8c0d1; font: 600 10px/1.4 ui-monospace, monospace; letter-spacing: .06em; cursor: pointer; }
-.facility-pin-toggle:hover { border-color: #3e91b7; color: #fff; }
-.facility-pin-toggle[aria-pressed="false"] { color: #6f8799; }
-[data-theme="light"] .facility-pin-toggle { border-color: #b4c6d1; background: #ffffffe8; color: #33505f; }
-[data-theme="light"] .facility-pin-toggle:hover { border-color: #17627f; color: #17627f; }
-
-.server-state.facility.warning { border-color: #7a5f24; background: #2a220a; color: #ffc247; }
-.server-state.facility.critical { border-color: #7a2c38; background: #2a0a10; color: #ff5268; }
-.server-state.facility.stale { border-color: #55407a; background: #1a1230; color: #c49bff; }
-.server-state.facility.unknown { border-color: #3c4e5e; background: #101a24; color: #8fa6b7; }
-.server-state.facility.stale i, .server-state.facility.unknown i { box-shadow: none; }
-[data-theme="light"] .server-state.facility.warning { border-color: #d1b56f; background: #fff8e6; color: #8a5c00; }
-[data-theme="light"] .server-state.facility.critical { border-color: #d09aa4; background: #fff0f2; color: #a3323f; }
-[data-theme="light"] .server-state.facility.stale { border-color: #b9a5dd; background: #f4effc; color: #6a3fb5; }
-[data-theme="light"] .server-state.facility.unknown { border-color: #b4c6d1; background: #eef3f6; color: #52687a; }
-.facility-empty { margin: 8px 0 0; color: #8fa6b7; font-size: 11px; }
-
-/* 경보 설비는 시야 밖에 있을 수 있어 씬 위에 따로 띄운다. 씬 조작을 막지 않도록 버튼만 클릭을 받는다. */
-/* 왼쪽 핀 상세 토글과 오른쪽 아래 패널(폭 360 + 여백)을 비운 구간 안에서 가운데로 둔다. */
-.facility-alarms { position: absolute; bottom: 18px; left: 130px; right: 404px; z-index: 3; width: fit-content; margin-inline: auto; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; max-height: 40vh; overflow-y: auto; padding: 7px 12px; border: 1px solid #7a2c38; border-radius: 3px; background: #0b1722e6; color: #ffd7dd; font: 600 10px/1.4 ui-monospace, monospace; letter-spacing: .06em; pointer-events: none; }
-.facility-alarms button { pointer-events: auto; display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border: 1px solid currentColor; border-radius: 3px; background: transparent; font: inherit; cursor: pointer; }
-.facility-alarms span { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border: 1px dashed currentColor; border-radius: 3px; }
-.facility-alarms i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.facility-alarms .critical { color: #ff5268; }
-.facility-alarms .warning { color: #ffc247; }
-.facility-alarms button.more { color: inherit; }
-.facility-alarms button:hover { background: #ffffff14; }
-@media (max-width: 720px) { .facility-alarms { left: 12px; right: 12px; bottom: 232px; } .facility-pin-toggle { left: 12px; bottom: 12px; } }
-[data-theme="light"] .facility-alarms { border-color: #d09aa4; background: #fffffff0; color: #a3323f; }
-[data-theme="light"] .facility-alarms .critical { color: #c0243a; }
-[data-theme="light"] .facility-alarms .warning { color: #8a5c00; }
+.object-label-toggle { position: absolute; left: 22px; bottom: 18px; z-index: 3; padding: 7px 10px; border: 1px solid #25394d; border-radius: 3px; background: #0b1722e6; color: #a8c0d1; font: 600 10px/1.4 ui-monospace, monospace; letter-spacing: .06em; cursor: pointer; }
+.object-label-toggle:hover { border-color: #3e91b7; color: #fff; }
+.object-label-toggle[aria-pressed="false"] { color: #6f8799; }
+[data-theme="light"] .object-label-toggle { border-color: #b4c6d1; background: #ffffffe8; color: #33505f; }
+[data-theme="light"] .object-label-toggle:hover { border-color: #17627f; color: #17627f; }
+@media (max-width: 720px) { .object-label-toggle { left: 12px; bottom: 12px; } }
 
 /*
   E18 ⑤ — 레이아웃 미설정·미배치 안내. 한 줄짜리 상태 문구와 달리 "무엇을 어디서 해야
