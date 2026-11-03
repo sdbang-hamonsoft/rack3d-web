@@ -1593,5 +1593,17 @@ FMS 권고와 다르게 둔 것:
 §11-45~47 의 구현은 현재 `main` 에 없다. 이름표 상태 정보는 브랜치 `feature/e76-device-label-status` 에 있고, 핀 카드는 커밋 `d2fe01a` 에 있다.
 FMS `facility-status` API 는 그대로 남지만 rack3d 는 호출하지 않는다.
 
-운영 되돌리기: `ssh buru-ext '~/cicd/rack3d/deploy.sh main-188c9b1'` — 사용자 승인 후 실행하고 여기 결과를 적는다.
+**운영 되돌리기 완료(사용자 승인).**
+
+| 항목 | 값 |
+|---|---|
+| 이미지 | `10.1.20.21:5000/rack3d-web:main-188c9b1` |
+| digest | `sha256:790013dfe7b2fdd211db534b11908bf942fcef8ac604c00456127c05b9aeef23` (§11-44 기록과 일치) |
+| 직전 운영본 | `main-9151456` (`sha256:a39abe77e29497d98699610dd7f953008c8fdf0e22ff69e1b99b9e232ece5732`) |
+| generation / revision | 16 → 17, Ready 1/1 |
+| 번들 | `assets/index-CiWSZAt-.js` (`대략 위치`·`facility-status` 0건, `/auth/branding` 있음) |
+
+옛 카드 번들 `index-CBAtpMkt.js` 는 원본 404, 공개 URL 은 Cloudflare 캐시(`HIT`)로 만료 전까지 200 이다. 새 화면은 이 파일을 참조하지 않아 퍼지하지 않았다.
+
+⚠️ `.latest_build_tag` 와 레지스트리 `:latest` 는 아직 `main-9151456`(카드)이다. 태그 없는 `deploy.sh` 는 카드를 다시 올린다.
 

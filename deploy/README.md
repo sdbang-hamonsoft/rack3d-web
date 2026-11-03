@@ -129,7 +129,7 @@ curl -sS https://fms.burunet.co.kr/rack3d/ | grep -o 'assets/index-[^"]*\.js'
 
 ```bash
 ssh buru-ext '~/cicd/rack3d/deploy.sh main-<이전sha>'          # 권장 — 태그를 명시해 고정 배포
-# ⚠️ 태그 없는 deploy.sh 는 되돌리기가 아니다 — `.latest_build_tag` 가 방금 빌드한 태그다.
+# ⚠️ 태그 없는 deploy.sh 는 되돌리기가 아니다 — `.latest_build_tag` 는 마지막 빌드 태그이고, 되돌린 뒤에는 운영본과 다르다.
 ssh buru-ext 'kubectl -n rack3d rollout undo deployment/rack3d-web'   # 직전 리비전으로
 ```
 
