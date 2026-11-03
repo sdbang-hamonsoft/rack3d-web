@@ -1496,3 +1496,26 @@ FMS 가 수집하지 않아 계획이 없는 것(장비 실시간 지표·트래
 
 검증: 이미지 번들에서 `데이터: ` 1·`연동 준비 중` 3, `SOURCE · NETIS-FMS`·`E19 B4`·`GET /api/performance`·`GET /api/tickets` 0.
 public 39개 git 해시 일치. 증거: `docs/deployments/2026-10-02-identifier-cleanup-build.json`.
+
+## 11-45. 시설 핀 3D 표시 1차 — 구현, 미배포 (2026-11-03, netis-fms E76)
+
+netis-fms 가 시설종합현황 핀을 3D 에도 보여 달라고 요청했고, rack3d 제안 (c) 를 사용자가 1차 범위로 확정했다고 전달받았다.
+(a) 비율 투영은 배경이 임의 이미지라 좌표를 지어내는 셈이고, (b) rack3d 편집은 E18 과 충돌해서 뺐다.
+
+**계약**
+- `objects[].asset` = `{assetId, assetCode, name, category, monitoringType}` | null
+- `GET /api/zones/{zoneId}/facility-status` = `[{assetId, severity, stale, collectedAt, metrics:[{key,value,unit}]}]` — ASSET READ, 스코프 밖 404, 없는 값 null, 30초 폴링
+
+**배포 순서는 상관없다.** 현재 FMS `AssetRef` 는 `{id, code, ...}` 라 rack3d 는 이를 "연결 없음"으로 읽고 `facility-status` 를 부르지 않는다(`facility-legacy` 로 0건 확인).
+계약이 `assetId` 로 확정되지 않고 `id` 로 남으면 `toObjectAsset` 을 고쳐야 한다.
+
+**표시 규칙**
+- FMS 가 NORMAL 로 답한 것만 정상이다. 응답에 없음·판정 없음은 `상태 없음`, 통신두절은 `통신두절`, 갱신 실패는 `상태 미갱신`.
+- 경보는 통신두절·갱신 실패가 겹쳐도 숨기지 않고 사실을 덧붙인다(`심각 · 미갱신`).
+- 3D 에 없는 자산(그리드 밖·배치 미연결)의 경보도 `설비 경보` 띠에 `(3D 미배치)` 로 올린다.
+- 200 인데 배열이 아닌 응답은 실패로 처리한다. 깨진 항목은 버리고 나머지를 보여준다.
+- 연결된 오브젝트만 클릭을 받는다. 연결이 없으면 지금까지처럼 `onPointerMissed` 를 막지 않는다.
+
+**검증** 단위 테스트 8건 신규(`scripts/dev/facility-status.test.mjs`), 스텁 + 헤드리스 Chrome 실입력(칩·형상 클릭, 빈 곳 클릭, 우클릭, 드래그, 재진입, `facility-fail`·`legacy`·`wrapped`·`malformed`·`orphan`, 1024·1600 폭 겹침).
+**못 한 것**: 실 FMS 대조(API 미배포), 교차 권한(403/404)은 FMS 소관이라 rack3d 쪽은 실패 표시만 확인했다.
+

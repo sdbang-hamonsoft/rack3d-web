@@ -1,5 +1,5 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
-import { Canvas, useFrame, useThree } from '@react-three/fiber'
+import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { ContactShadows, Environment, Html, Lightformer, OrbitControls, useCursor, useGLTF } from '@react-three/drei'
 import * as THREE from 'three'
 import type { Group } from 'three'
@@ -17,8 +17,8 @@ import {
 } from './rackLayouts'
 import type { RackCacheEntry, SceneGrid, SceneObject, ScenePlacement } from './rackLayouts'
 import type { RackData, ServerData, ServerModel } from './rackLayouts'
-import { collectZones, fetchSidebar, fetchZoneLayout, fetchZoneRacks, fetchZoneUMaps, type ZoneSummary } from './api/fms'
-import type { AssetImageView, MeResponse, RackSummary, RackSeverity, RackUMap, ZoneLayout } from './api/types'
+import { collectZones, fetchSidebar, fetchZoneFacilityStatus, fetchZoneLayout, fetchZoneRacks, fetchZoneUMaps, type ZoneSummary } from './api/fms'
+import type { AssetImageView, FacilityMetric, FacilityStatus, LayoutObjectAsset, MeResponse, RackSummary, RackSeverity, RackUMap, ZoneLayout } from './api/types'
 import {
   PHOTO_DEMAND_FRONT,
   PHOTO_DEMAND_REAR,
@@ -44,11 +44,14 @@ import {
   largestFreeBlock,
   rackAvailableUnits,
   rackOccupancyPercent,
+  collectFacilityAlarms,
+  facilityStatusView,
+  severityLabel,
   severityToneColors,
   severityTones,
   unmountedAssetCount,
 } from './rackFigures'
-import type { HeatmapDataset, HeatmapMode, RackHeatmapVisual, SeverityTone, ZoneAggregate } from './rackFigures'
+import type { FacilityStatusView, HeatmapDataset, HeatmapMode, RackHeatmapVisual, SeverityTone, ZoneAggregate } from './rackFigures'
 import { useBranding, useProductName } from './hooks/useBranding'
 import './App.css'
 
@@ -198,23 +201,6 @@ type ThemeMode = 'dark' | 'light'
  * 전산실 목록은 netis-fms `GET /api/locations/sidebar`가 SSOT다(D1).
  * 예전의 하드코딩 3건(서울/판교/부산)과 그 평균온도는 실측이 아니어서 제거했다.
  */
-
-/** FMS 판정 등급 → 한글 라벨. 등급 자체는 FMS 원값을 그대로 쓴다(E19 C1). */
-const severityLabels: Record<RackSeverity, string> = {
-  NORMAL: '정상',
-  CAUTION: '주의',
-  MAJOR: '경고',
-  CRITICAL: '심각',
-}
-
-/**
- * 등급 라벨. **원값 폴백이 있는 이유**: `RackSeverity`는 우리 타입이지 서버 검증이 아니다(C5).
- * FMS가 새 등급을 추가하면 인덱싱이 `undefined`가 되어 화면에서 등급 칸이 통째로 사라진다 —
- * 그때는 모르는 원값이라도 보여주는 편이 맞다. 호출부마다 폴백을 붙였다 말았다 하지 않게 함수로 둔다.
- */
-function severityLabel(severity: RackSeverity): string {
-  return severityLabels[severity] ?? severity
-}
 
 /**
  * 우리 GLB 3종의 표시명 — **장비의 실제 모델명이 아니다.**
@@ -782,10 +768,28 @@ function LayoutObjectModel({
  * 오브젝트 GLB 하나 받는 동안 **ZONE 화면 전체가 로딩으로 되돌아간다.** 여기서 잡으면
  * 그 오브젝트만 색 박스로 있다가 모델로 바뀐다.
  *
- * 클릭 핸들러를 달지 않는 것은 의도다 — 이 오브젝트들에는 붙일 상세 데이터가 없고,
- * 핸들러가 있으면 r3f가 `onPointerMissed`(전체 보기 복귀)를 막는다.
+ * **자산이 연결된 오브젝트(E76)에만** 클릭 핸들러를 단다. 나머지는 붙일 상세 데이터가 없고,
+ * 핸들러가 있으면 r3f가 `onPointerMissed`(전체 보기 복귀)를 막는다 — 그래서 `onClick={undefined}`가
+ * 아니라 **prop 자체를 뺀다**(`status` 가 `null` 이면 연결 없음).
  */
-function LayoutObjectMesh({ object, tileSize }: { object: SceneObject; tileSize: number }) {
+/** 접힌 상태에서 보여줄 설비 경보 수. 등급순이라 가장 심각한 것이 먼저 나온다. */
+const FACILITY_ALARMS_COLLAPSED = 4
+/** 이 거리(px) 넘게 움직였으면 클릭이 아니라 시점 조작이다. */
+const CLICK_DRAG_TOLERANCE_PX = 4
+
+function LayoutObjectMesh({
+  object,
+  tileSize,
+  status,
+  selected,
+  onSelect,
+}: {
+  object: SceneObject
+  tileSize: number
+  status: FacilityStatusView | null
+  selected: boolean
+  onSelect: (object: SceneObject) => void
+}) {
   const { placement, heightM } = object
   // 1타일보다 조금 작게 — 옆 칸과 붙어 한 덩어리로 보이지 않게 칸 경계를 남긴다.
   const footprint = Math.max(0.12, tileSize * 0.84)
@@ -798,6 +802,13 @@ function LayoutObjectMesh({ object, tileSize }: { object: SceneObject; tileSize:
     <group
       position={[placement.tileX * tileSize, 0, placement.tileZ * tileSize]}
       rotation={[0, placement.rotation, 0]}
+      {...(status ? {
+        onClick: (event: ThreeEvent<MouseEvent>) => {
+          event.stopPropagation()
+          // r3f 는 같은 오브젝트에서 눌렀다 떼면 드래그여도 클릭으로 준다. 시점 회전이 선택이 되면 안 된다.
+          if (event.delta <= CLICK_DRAG_TOLERANCE_PX) onSelect(object)
+        },
+      } : {})}
     >
       {model ? (
         <Suspense fallback={box}>
@@ -825,10 +836,25 @@ function LayoutObjectMesh({ object, tileSize }: { object: SceneObject; tileSize:
         모델에 가려질 수 있어서, 2D 에디터와의 색 대응이 여기에 남는다.
       */}
       <Html position={[0, LAYOUT_OBJECT_BASE_Y + Math.max(heightM + elevation + 0.14, 0.62), 0]} center distanceFactor={8} zIndexRange={[1, 0]}>
-        <div className="layout-object-label" style={{ borderColor: object.color }}>
-          <i style={{ background: object.color }} />
-          {object.label}
-        </div>
+        {status ? (
+          /* 바닥형 누수감지처럼 형상이 작아 클릭하기 어려운 것이 있어 이름표도 누를 수 있어야 한다. */
+          <button
+            type="button"
+            className={`layout-object-label linked ${status.tone}${selected ? ' selected' : ''}`}
+            style={{ borderColor: object.color }}
+            aria-label={`${object.label}, ${status.label}, 상세 보기`}
+            onClick={(event) => { event.stopPropagation(); onSelect(object) }}
+          >
+            <i style={{ background: object.color }} />
+            {object.label}
+            <b>{status.label}</b>
+          </button>
+        ) : (
+          <div className="layout-object-label" style={{ borderColor: object.color }}>
+            <i style={{ background: object.color }} />
+            {object.label}
+          </div>
+        )}
       </Html>
     </group>
   )
@@ -1298,15 +1324,21 @@ function DataCenterScene({
   objects,
   focusedRack,
   selectedServer,
+  selectedFacilityId,
+  facilityStatusFor,
   heatmapVisuals,
   rackSeverities,
   theme,
   onFocusRack,
   onSelectServer,
+  onSelectFacility,
 }: {
   grid: SceneGrid | null
   racks: RackData[]
   objects: SceneObject[]
+  selectedFacilityId: string | null
+  facilityStatusFor: (object: SceneObject) => FacilityStatusView | null
+  onSelectFacility: (object: SceneObject) => void
   focusedRack: RackData | null
   selectedServer: ServerData | null
   heatmapVisuals: Map<string, RackHeatmapVisual>
@@ -1372,7 +1404,14 @@ function DataCenterScene({
       <Suspense fallback={<Loading />}>
         {grid && <FloorTiles grid={grid} theme={theme} />}
         {grid && objects.map((object) => (
-          <LayoutObjectMesh key={object.id} object={object} tileSize={grid.tileSize} />
+          <LayoutObjectMesh
+            key={object.id}
+            object={object}
+            tileSize={grid.tileSize}
+            status={facilityStatusFor(object)}
+            selected={selectedFacilityId === object.id}
+            onSelect={onSelectFacility}
+          />
         ))}
         {/*
           **배치가 없는 랙은 그리지 않는다**(E18 ⑤) — 좌표를 지어내면 실제 배치로 오인된다.
@@ -1652,6 +1691,69 @@ function DataCenterLobby({
  * 전부 `serverProfiles` 하드코딩이었다. netis-fms는 IT 장비 텔레메트리를 수집하지 않으므로
  * (A6 = b 확정) 그 값들은 **대체 소스가 없다** — 되살리지 않고 없는 이유를 밝힌다(Q5-b·C7).
  */
+/** 계측값 표시 — `null` 은 0 이 아니라 값 없음이다(C6). 단위도 값이 있을 때만 붙인다. */
+function formatFacilityMetric(metric: FacilityMetric): string {
+  if (metric.value === null || metric.value === undefined) return NO_VALUE
+  return metric.unit ? `${metric.value} ${metric.unit}` : String(metric.value)
+}
+
+/** 자산이 연결된 배치 오브젝트의 상세(E76). 값은 전부 FMS 원값이고 rack3d 가 판정하지 않는다. */
+function FacilityDetailPanel({
+  object,
+  asset,
+  status,
+  view,
+  onOverview,
+}: {
+  object: SceneObject
+  asset: LayoutObjectAsset
+  status: FacilityStatus | undefined
+  view: FacilityStatusView
+  onOverview: () => void
+}) {
+  const productName = useProductName()
+  const metrics = status?.metrics ?? []
+  return (
+    <>
+      <div className="server-panel-toolbar">
+        <button type="button" onClick={onOverview}><span aria-hidden="true">←</span> 전체 보기</button>
+        <span><i /> {productName}</span>
+      </div>
+
+      <p className="panel-title">FACILITY DETAIL</p>
+      <div className="server-focus-heading">
+        <div>
+          <strong>{asset.name ?? object.label}</strong>
+          <span>{orDash(asset.assetCode)}</span>
+        </div>
+        <span className={`server-state facility ${view.tone}`}><i />{view.label}</span>
+      </div>
+
+      <section className="server-system-info">
+        <div className="server-section-heading"><span>STATUS</span><small>{productName}</small></div>
+        <dl>
+          <div><dt>판정</dt><dd>{view.label}</dd></div>
+          <div><dt>수신</dt><dd>{status?.collectedAt ? new Date(status.collectedAt).toLocaleString('ko-KR') : NO_VALUE}</dd></div>
+          <div><dt>CATEGORY</dt><dd>{orDash(asset.category)}</dd></div>
+        </dl>
+      </section>
+
+      <section className="server-system-info">
+        <div className="server-section-heading"><span>METRICS</span><small>{productName}</small></div>
+        {metrics.length > 0 ? (
+          <dl>
+            {metrics.map((metric, index) => (
+              <div key={`${metric.key}-${index}`}><dt>{metric.key}</dt><dd>{formatFacilityMetric(metric)}</dd></div>
+            ))}
+          </dl>
+        ) : (
+          <p className="facility-empty">받은 계측값이 없습니다.</p>
+        )}
+      </section>
+    </>
+  )
+}
+
 function ServerDetailPanel({
   rack,
   server,
@@ -2469,11 +2571,11 @@ function useZoneScene(
   zoneRacks: RackSummary[] | null,
   layout: ZoneLayout | null,
   uMaps: RackUMap[] | null,
-): { grid: SceneGrid | null; racks: RackData[]; objects: SceneObject[] } {
+): { grid: SceneGrid | null; racks: RackData[]; objects: SceneObject[]; unplacedFacilityAssets: LayoutObjectAsset[] } {
   const build = (cache: Map<string, RackCacheEntry>) => {
     const scene = buildZoneScene(zoneRacks, layout, uMaps)
     const { racks, cache: nextCache } = reuseUnchangedRacks(cache, scene.racks)
-    return { grid: scene.grid, objects: scene.objects, racks, cache: nextCache }
+    return { grid: scene.grid, objects: scene.objects, unplacedFacilityAssets: scene.unplacedFacilityAssets, racks, cache: nextCache }
   }
 
   const [state, setState] = useState(() => {
@@ -2513,6 +2615,8 @@ function App() {
   const [selectedDataCenter, setSelectedDataCenter] = useState<ZoneSummary | null>(null)
   const [focusedRackId, setFocusedRackId] = useState<string | null>(null)
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null)
+  const [selectedFacilityId, setSelectedFacilityId] = useState<string | null>(null)
+  const [facilityAlarmsExpanded, setFacilityAlarmsExpanded] = useState(false)
   const [dashboardOpen, setDashboardOpen] = useState(false)
   const [incidentMode, setIncidentMode] = useState(false)
   const [heatmapMode, setHeatmapMode] = useState<HeatmapMode>('normal')
@@ -2595,7 +2699,43 @@ function App() {
   const layout = layoutResource.data
 
   /** FMS 랙 목록(SSOT) + ZONE 배치 + ZONE u맵. 값이 안 바뀐 랙은 객체 신원을 유지한다. */
-  const { grid, racks, objects: sceneObjects } = useZoneScene(zoneRacks, layout, uMaps)
+  const { grid, racks, objects: sceneObjects, unplacedFacilityAssets } = useZoneScene(zoneRacks, layout, uMaps)
+
+  /**
+   * 설비 상태(E76) — 값이 바뀌는 데이터라 랙 목록과 같은 30초 폴링이다.
+   * **연결된 자산이 하나도 없으면 호출하지 않는다** — 보여줄 곳이 없는 데다, 이 API 가 없는
+   * 옛 FMS 에 붙어도 404 가 쌓이지 않는다.
+   */
+  const hasLinkedFacility = useMemo(
+    () => unplacedFacilityAssets.length > 0 || sceneObjects.some((object) => object.asset !== null),
+    [sceneObjects, unplacedFacilityAssets],
+  )
+  const facilityFetcher = useMemo(
+    () => (sessionReady && selectedZoneId !== null && hasLinkedFacility ? () => fetchZoneFacilityStatus(selectedZoneId) : null),
+    [sessionReady, selectedZoneId, hasLinkedFacility],
+  )
+  const facilityResource = usePolledResource(facilityFetcher, RACK_POLL_INTERVAL_MS)
+  const facilityStatuses = facilityResource.data
+  const facilityFeedFailed = facilityResource.failure !== null
+  const facilityStatusById = useMemo(() => {
+    const statuses = new Map<number, FacilityStatus>()
+    facilityStatuses?.forEach((status) => statuses.set(status.assetId, status))
+    return statuses
+  }, [facilityStatuses])
+  /** 첫 응답 전에도 "상태 없음"이다 — 받기 전이라고 정상으로 보이면 안 된다. */
+  const facilityStatusFor = useCallback((object: SceneObject): FacilityStatusView | null => (
+    object.asset ? facilityStatusView(facilityStatusById.get(object.asset.assetId), facilityFeedFailed) : null
+  ), [facilityStatusById, facilityFeedFailed])
+  const selectedFacility = useMemo(
+    () => (selectedFacilityId ? sceneObjects.find((object) => object.id === selectedFacilityId && object.asset) ?? null : null),
+    [sceneObjects, selectedFacilityId],
+  )
+  /** 경보 중인 설비 — 시야 밖이거나 3D 에 없어도 알 수 있도록 상단에 띄운다. 심각한 것부터. */
+  const facilityAlarms = useMemo(
+    () => collectFacilityAlarms(sceneObjects, unplacedFacilityAssets, facilityStatusById, facilityFeedFailed),
+    [sceneObjects, unplacedFacilityAssets, facilityStatusById, facilityFeedFailed],
+  )
+
   /**
    * 배치되지 않은 랙 — 3D에는 없지만 목록·검색·경보에는 있다. 수를 밝히지 않으면
    * "씬에 랙이 몇 대 빠져 있다"를 사용자가 알 방법이 없다.
@@ -2680,6 +2820,9 @@ function App() {
         : uMapResource.failure ? '랙 U 배치를' : '3D 배치를'
       return { tone: 'stale', label: 'LIVE · 구조 미갱신', detail: `${what} 갱신하지 못했습니다 · 측정값 갱신 ${time}` }
     }
+    if (facilityResource.failure) {
+      return { tone: 'stale', label: 'LIVE · 설비 상태 미갱신', detail: `설비 상태를 갱신하지 못했습니다. ${facilityResource.failure.message} · 랙 측정값 갱신 ${time}` }
+    }
     return { tone: 'live', label: 'LIVE', detail: `마지막 갱신 ${time}` }
   })()
 
@@ -2695,6 +2838,7 @@ function App() {
     racksResource.retryNow()
     uMapResource.retryNow()
     layoutResource.retryNow()
+    if (hasLinkedFacility) facilityResource.retryNow()
   }
 
   /** 상단바 "IN RACKS" — 랙 내 자산 합(가짜 0 방지 헬퍼 경유). */
@@ -2750,17 +2894,27 @@ function App() {
   const clearFocus = () => {
     setFocusedRackId(null)
     setSelectedServerId(null)
+    setSelectedFacilityId(null)
+    setIncidentMode(false)
+  }
+  const handleSelectFacility = (object: SceneObject) => {
+    setFocusedRackId(null)
+    setSelectedServerId(null)
+    setSelectedFacilityId(object.id)
+    setDashboardOpen(false)
     setIncidentMode(false)
   }
   const handleFocusRack = (rack: RackData) => {
     setFocusedRackId(rack.id)
     setSelectedServerId(null)
+    setSelectedFacilityId(null)
     setDashboardOpen(false)
     setIncidentMode(false)
   }
   const handleSelectServer = (rack: RackData, server: ServerData) => {
     setFocusedRackId(rack.id)
     setSelectedServerId(server.id)
+    setSelectedFacilityId(null)
     setDashboardOpen(false)
   }
   /** 경보 랙 탐색 — 대상은 FMS 판정이 정상이 아닌 랙이다. */
@@ -2772,6 +2926,7 @@ function App() {
     const normalizedIndex = (index % alertRacks.length + alertRacks.length) % alertRacks.length
     setFocusedRackId(alertRacks[normalizedIndex].rack.id)
     setSelectedServerId(null)
+    setSelectedFacilityId(null)
     setDashboardOpen(false)
     setIncidentMode(true)
   }
@@ -2879,7 +3034,7 @@ function App() {
           className="viewport"
           title="마우스로 시점을 조작할 수 있습니다"
           onPointerDownCapture={(event) => {
-            if (event.button !== 2 || !focusedRack) return
+            if (event.button !== 2 || (!focusedRack && !selectedFacilityId)) return
             event.preventDefault()
             event.stopPropagation()
             clearFocus()
@@ -2899,6 +3054,9 @@ function App() {
               objects={sceneObjects}
               focusedRack={focusedRack}
               selectedServer={selectedServer}
+              selectedFacilityId={selectedFacilityId}
+              facilityStatusFor={facilityStatusFor}
+              onSelectFacility={handleSelectFacility}
               heatmapVisuals={heatmapDataset.visuals}
               rackSeverities={rackSeverities}
               theme={theme}
@@ -2907,6 +3065,26 @@ function App() {
             />
           </Canvas>
           <div className="crosshair" aria-hidden="true" />
+
+          {facilityAlarms.length > 0 && (
+            <div className="facility-alarms" role="alert">
+              <strong>설비 경보 {facilityAlarms.length}</strong>
+              {(facilityAlarmsExpanded ? facilityAlarms : facilityAlarms.slice(0, FACILITY_ALARMS_COLLAPSED)).map(({ key, label, view, object }) => (
+                object ? (
+                  <button key={key} type="button" className={view.tone} onClick={() => handleSelectFacility(object)}>
+                    <i />{label} · {view.label}
+                  </button>
+                ) : (
+                  <span key={key} className={view.tone}><i />{label} · {view.label}</span>
+                )
+              ))}
+              {facilityAlarms.length > FACILITY_ALARMS_COLLAPSED && (
+                <button type="button" className="more" onClick={() => setFacilityAlarmsExpanded((expanded) => !expanded)}>
+                  {facilityAlarmsExpanded ? '접기' : `외 ${facilityAlarms.length - FACILITY_ALARMS_COLLAPSED}건`}
+                </button>
+              )}
+            </div>
+          )}
 
           {/*
             랙 목록의 로딩·권한·실패 상태를 씬 위에 명시한다.
@@ -2992,10 +3170,18 @@ function App() {
         />
 
         <aside
-          key={selectedServer?.id ?? focusedRack?.id ?? 'navigation'}
-          className={focusedRack ? `controls-panel detail${selectedServer ? ' server-detail-panel' : ''}` : 'controls-panel'}
+          key={selectedFacility?.id ?? selectedServer?.id ?? focusedRack?.id ?? 'navigation'}
+          className={selectedFacility ? 'controls-panel detail server-detail-panel' : focusedRack ? `controls-panel detail${selectedServer ? ' server-detail-panel' : ''}` : 'controls-panel'}
         >
-          {focusedRack && selectedServer ? (
+          {selectedFacility?.asset ? (
+            <FacilityDetailPanel
+              object={selectedFacility}
+              asset={selectedFacility.asset}
+              status={facilityStatusById.get(selectedFacility.asset.assetId)}
+              view={facilityStatusView(facilityStatusById.get(selectedFacility.asset.assetId), facilityFeedFailed)}
+              onOverview={clearFocus}
+            />
+          ) : focusedRack && selectedServer ? (
             <ServerDetailPanel
               rack={focusedRack}
               server={selectedServer}

@@ -33,6 +33,11 @@ VITE_FMS_ORIGIN=http://localhost:8777 npm run dev              # rack3d를 스�
 | `layout-partial` | A-01·A-03 만 배치 — "랙 3대가 3D 배치에 없습니다" 안내. **목록·검색·경보에는 남아야 한다**(경보 랙이 조용히 사라지면 안 된다) |
 | `layout-orphan` | 랙 목록에 없는 RACK 오브젝트(`rack: null` 1건 + 미등록 `locationId` 1건) — 랙이 아니라 색 박스로 그려지는지 확인(실측 ZONE 19 재현) |
 | `layout-tile1000` | `tileMm 1000` · 10×6 그리드 — 그리드 상수 하드코딩이 남아 있지 않은지 확인 |
+| `facility-fail` | 설비 상태 500 — 칩이 `상태 미갱신`, 상단 `LIVE · 설비 상태 미갱신` 인지 확인 |
+| `facility-legacy` | E76 이전 FMS(`asset: {id, code}` + API 404) — 연결 없음으로 읽혀 `facility-status` 호출이 0건인지 확인 |
+| `facility-wrapped` | 설비 상태가 200 인데 배열이 아님 — `상태 없음 · LIVE` 가 아니라 실패로 보이는지 확인 |
+| `facility-malformed` | 깨진 항목이 섞인 응답 — 앱이 내려가지 않고 멀쩡한 항목은 표시되는지 확인 |
+| `facility-orphan` | 3D 에 없는 자산의 심각 경보 + 경고·주의 혼합 — `설비 경보` 맨 앞에 `(3D 미배치)` 로 뜨고 `외 N건` 이 펼쳐지는지 확인 |
 
 | `photo-meta-fail` | `GET /assets/{id}/images` 500 — 메타 실패가 사진 없는 상태로 수렴하는지(씬은 살아 있어야 한다) |
 | `photo-fail` | 사진 바이트 500 — 실패 쿨다운이 걸리는지, 같은 면을 무한 재요청하지 않는지 |

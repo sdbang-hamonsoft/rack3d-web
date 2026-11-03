@@ -11,8 +11,8 @@
  */
 
 import * as THREE from 'three'
-import type { RackData, ServerData } from './rackLayouts'
-import type { RackSeverity, RackSummary } from './api/types'
+import type { RackData, SceneObject, ServerData } from './rackLayouts'
+import type { FacilityStatus, LayoutObjectAsset, RackSeverity, RackSummary } from './api/types'
 
 /** 값이 없을 때 화면에 쓰는 표기. **null을 0으로 바꾸지 않는다**(C6). */
 export const NO_VALUE = '—'
@@ -304,6 +304,100 @@ export const severityTones: Record<RackSeverity, SeverityTone> = {
   CAUTION: 'warning',
   MAJOR: 'warning',
   CRITICAL: 'critical',
+}
+
+/** FMS 판정 등급 → 한글 라벨. 등급 자체는 FMS 원값을 그대로 쓴다(E19 C1). */
+const severityLabels: Record<RackSeverity, string> = {
+  NORMAL: '정상',
+  CAUTION: '주의',
+  MAJOR: '경고',
+  CRITICAL: '심각',
+}
+
+/**
+ * 등급 라벨. **원값 폴백이 있는 이유**: `RackSeverity`는 우리 타입이지 서버 검증이 아니다(C5).
+ * FMS가 새 등급을 추가하면 인덱싱이 `undefined`가 되어 화면에서 등급 칸이 통째로 사라진다 —
+ * 그때는 모르는 원값이라도 보여주는 편이 맞다. 호출부마다 폴백을 붙였다 말았다 하지 않게 함수로 둔다.
+ */
+export function severityLabel(severity: RackSeverity): string {
+  return severityLabels[severity] ?? severity
+}
+
+export type FacilityTone = SeverityTone | 'stale' | 'unknown'
+
+export type FacilityStatusView = {
+  tone: FacilityTone
+  label: string
+  /** 경보(정상이 아닌 FMS 판정). 통신두절·상태 없음은 경보가 아니다 — 판정이 없기 때문이다. */
+  alarm: boolean
+}
+
+/**
+ * 설비 상태 표시. **FMS 가 "정상"이라고 답한 경우에만 정상으로 보인다.**
+ *
+ * 관제 화면에서 가장 나쁜 실수는 모르는 것을 초록으로 칠하는 것이다. 그래서 응답에 없음·판정 없음·
+ * 통신두절·갱신 실패를 전부 정상과 다른 상태로 둔다. 반대로 경보는 어떤 경우에도 숨기지 않는다 —
+ * 통신두절이나 갱신 실패가 겹쳐도 마지막 경보 판정을 그대로 보여주고 사실을 덧붙인다.
+ *
+ * @param feedFailed `facility-status` 를 지금 못 받고 있으면 `true`(`status` 는 마지막으로 받은 값).
+ */
+export function facilityStatusView(status: FacilityStatus | undefined, feedFailed: boolean): FacilityStatusView {
+  const severity = status?.severity ?? null
+  const qualifier = feedFailed ? '미갱신' : status?.stale ? '통신두절' : null
+  if (severity !== null && severity !== 'NORMAL') {
+    const label = severityLabel(severity)
+    // 모르는 등급(C5)을 정상처럼 보이게 두지 않는다.
+    return { tone: severityTones[severity] ?? 'warning', label: qualifier ? `${label} · ${qualifier}` : label, alarm: true }
+  }
+  if (feedFailed) return { tone: 'unknown', label: '상태 미갱신', alarm: false }
+  if (status?.stale) return { tone: 'stale', label: '통신두절', alarm: false }
+  if (severity === 'NORMAL') return { tone: 'normal', label: severityLabel(severity), alarm: false }
+  return { tone: 'unknown', label: '상태 없음', alarm: false }
+}
+
+export type FacilityAlarm = {
+  key: string
+  label: string
+  view: FacilityStatusView
+  /** 3D 에 있으면 그 오브젝트. `null` 이면 그릴 곳이 없어 눌러도 갈 곳이 없다. */
+  object: SceneObject | null
+}
+
+/** 등급 순서. 톤으로 정렬하면 MAJOR 와 CAUTION 이 같아 MAJOR 가 뒤로 밀린다. 모르는 등급은 MAJOR 와 같이 둔다. */
+const facilityAlarmRank = (severity: RackSeverity | null | undefined): number => {
+  if (severity === 'CRITICAL') return 0
+  return severity === 'CAUTION' ? 2 : 1
+}
+
+/**
+ * 경보 목록. **3D 에 그려진 것만 세지 않는다.** 그리드 밖 좌표이거나 배치에 연결되지 않은 자산의
+ * 경보도 응답에 있으면 전부 올린다 — 안 그러면 심각 경보가 씬·상단바 어디에도 없이 사라진다
+ * (배치되지 않은 랙을 조용히 빼지 않는 것과 같은 규칙이다).
+ */
+export function collectFacilityAlarms(
+  objects: SceneObject[],
+  unplacedAssets: LayoutObjectAsset[],
+  statuses: Map<number, FacilityStatus>,
+  feedFailed: boolean,
+): FacilityAlarm[] {
+  const alarms: { alarm: FacilityAlarm; rank: number }[] = []
+  const shown = new Set<number>()
+  objects.forEach((object) => {
+    if (!object.asset) return
+    shown.add(object.asset.assetId)
+    const status = statuses.get(object.asset.assetId)
+    const view = facilityStatusView(status, feedFailed)
+    if (view.alarm) alarms.push({ alarm: { key: object.id, label: object.label, view, object }, rank: facilityAlarmRank(status?.severity) })
+  })
+  const unplacedNames = new Map(unplacedAssets.map((asset) => [asset.assetId, asset.name]))
+  statuses.forEach((status, assetId) => {
+    if (shown.has(assetId)) return
+    const view = facilityStatusView(status, feedFailed)
+    if (!view.alarm) return
+    const name = unplacedNames.get(assetId) ?? `자산 ${assetId}`
+    alarms.push({ alarm: { key: `asset-${assetId}`, label: `${name} (3D 미배치)`, view, object: null }, rank: facilityAlarmRank(status.severity) })
+  })
+  return alarms.sort((a, b) => a.rank - b.rank).map(({ alarm }) => alarm)
 }
 
 /** 랙 경보 3D 표시·범례가 함께 쓰는 색. 한 화면에서 색과 범례가 어긋나지 않게 한 곳에 둔다. */

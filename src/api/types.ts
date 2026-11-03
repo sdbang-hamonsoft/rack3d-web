@@ -233,8 +233,44 @@ export type LayoutObject = {
   /** 사용자 지정 명칭. **빈 문자열일 수 있다** — 그때는 `type` 을 표시명으로 쓴다(§11-31 ①). */
   label: string
   rack: LayoutObjectRack | null
-  /** 자산 참조. 실측은 전부 `null` 이고 rack3d 는 쓰지 않는다 — 값을 읽지 말 것. */
+  /**
+   * 연결된 자산(E76 계약 `LayoutObjectAsset`). 연결이 없으면 `null`.
+   *
+   * ⚠️ E76 이전 FMS 는 같은 자리에 `{id, code, ...}` 를 준다 — 타입을 믿지 말고
+   * `toObjectAsset` 을 거쳐 읽는다. 그 형태는 "연결 없음"으로 취급된다.
+   */
   asset: unknown
+}
+
+/** `objects[].asset` — 시설 핀 자산과 3D 오브젝트의 연결(netis-fms E76). */
+export type LayoutObjectAsset = {
+  assetId: number
+  assetCode: string | null
+  name: string | null
+  category: string | null
+  monitoringType: string | null
+}
+
+/** 설비 계측값 1건. `value` 는 FMS 원값이고, 없으면 `null` 이다(0 으로 치환 금지, C6). */
+export type FacilityMetric = {
+  key: string
+  value: number | string | null
+  unit: string | null
+}
+
+/**
+ * `GET /api/zones/{zoneId}/facility-status` 의 원소(ASSET READ, netis-fms E76).
+ *
+ * `severity` 는 **FMS 판정**이다 — rack3d 가 계측값으로 다시 판정하지 않는다.
+ * 없으면 `null` 이고, 그때 화면은 "정상"이 아니라 "상태 없음"이어야 한다.
+ */
+export type FacilityStatus = {
+  assetId: number
+  severity: RackSeverity | null
+  /** 통신두절. */
+  stale: boolean
+  collectedAt: string | null
+  metrics: FacilityMetric[]
 }
 
 /**

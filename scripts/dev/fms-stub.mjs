@@ -193,7 +193,37 @@ for (let i = 0; i < EXTRA_RACKS; i += 1) {
  * 안전하게 넘어가야 하고, 절대 씬이 깨지면 안 된다.
  * `label: ''` 인 건은 표시명이 `type` 으로 대체되는지 본다.
  */
-const layoutObject = (o) => ({ dir: 'NORTH', label: '', rack: null, asset: null, ...o })
+const layoutObject = (o) => withFacilityAssets({ dir: 'NORTH', label: '', rack: null, asset: null, ...o })
+
+/**
+ * 시설 핀 자산 연결(netis-fms E76). 레이아웃 오브젝트 id → 자산.
+ * `SCENARIO=facility-legacy` 는 E76 이전 FMS 재현이다 — `{id, code}` 형태라 연결 없음으로 읽혀야 하고
+ * `facility-status` 호출이 한 건도 나가지 않아야 한다.
+ */
+const facilityAssetByObjectId = {
+  6: { assetId: 9006, assetCode: 'CRAC-01', name: '항온항습기 #1', category: 'CRAC', monitoringType: 'MODBUS' },
+  7: { assetId: 9007, assetCode: 'UPS-01', name: 'UPS #1', category: 'UPS', monitoringType: 'SNMP' },
+  9: { assetId: 9009, assetCode: 'TH-01', name: '온습도 센서 #1', category: 'SENSOR', monitoringType: 'TH' },
+  10: { assetId: 9010, assetCode: 'DOOR-01', name: '방화문', category: 'DOOR', monitoringType: null },
+  15: { assetId: 9015, assetCode: 'LEAK-01', name: '누수감지 #1', category: 'SENSOR', monitoringType: 'DI' },
+  16: { assetId: 9016, assetCode: 'CCTV-01', name: 'CCTV #1', category: 'CCTV', monitoringType: null },
+  18: { assetId: 9018, assetCode: 'FIRE-01', name: '화재감지 #1', category: 'SENSOR', monitoringType: 'DI' },
+}
+const collectedAt = () => new Date().toISOString()
+/** 표시 분기마다 1건씩: 정상 / 주의+통신두절 / 통신두절 / 판정 없음 / 심각 / 응답에 없음(CCTV) / 정상+값 없음. */
+const facilityStatuses = () => [
+  { assetId: 9006, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [{ key: 'supplyTemp', value: 18.4, unit: '°C' }, { key: 'returnTemp', value: 24.1, unit: '°C' }] },
+  { assetId: 9007, severity: 'CAUTION', stale: true, collectedAt: '2026-11-03T01:00:00Z', metrics: [{ key: 'loadPct', value: 62, unit: '%' }] },
+  { assetId: 9009, severity: 'NORMAL', stale: true, collectedAt: '2026-11-03T01:00:00Z', metrics: [{ key: 'temp', value: null, unit: '°C' }] },
+  { assetId: 9010, severity: null, stale: false, collectedAt: null, metrics: [] },
+  { assetId: 9015, severity: 'CRITICAL', stale: false, collectedAt: collectedAt(), metrics: [{ key: 'leak', value: 'DETECTED', unit: null }] },
+  { assetId: 9018, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [] },
+]
+const withFacilityAssets = (object) => {
+  const asset = facilityAssetByObjectId[object.id]
+  if (!asset) return object
+  return { ...object, asset: SCENARIO === 'facility-legacy' ? { id: asset.assetId, code: asset.assetCode, name: asset.name } : asset }
+}
 
 const layoutObjects = [
   layoutObject({ id: 1, type: 'RACK', x: 2, z: 2, dir: 'NORTH', label: 'A-01', rack: { locationId: 11, name: 'A-01', code: 'A01', rackUnits: 42 } }),
@@ -322,6 +352,30 @@ createServer((req, res) => {
   }
   // 랙 없는 ZONE은 200 [], 없는 ZONE은 404 (실 FMS 실측과 동일)
   if (/^\/api\/zones\/\d+\/u-maps$/.test(req.url ?? '')) {
+    return json(404, { code: 'NOT_FOUND', message: '없음' })
+  }
+  // ZONE 시설 상태(netis-fms E76). 없는 ZONE 은 404.
+  if (req.url === '/api/zones/101/facility-status') {
+    if (SCENARIO === 'facility-fail') return json(500, { code: 'INTERNAL_ERROR', message: '실패' })
+    if (SCENARIO === 'facility-legacy') return json(404, { code: 'NOT_FOUND', message: '없음' })
+    // 200 인데 모양이 다르다 — "상태 없음 · LIVE" 가 아니라 실패로 보여야 한다.
+    if (SCENARIO === 'facility-wrapped') return json(200, { content: facilityStatuses() })
+    // 깨진 항목이 섞였다 — 앱이 내려가지 않아야 하고 멀쩡한 항목은 그대로 나와야 한다.
+    if (SCENARIO === 'facility-malformed') {
+      return json(200, [null, 7, { assetId: 'x' }, { assetId: 9015, severity: { a: 1 }, metrics: [null, { key: 'leak', value: { b: 2 } }] }, ...facilityStatuses().filter((s) => s.assetId !== 9015)])
+    }
+    // 3D 에 없는 자산의 경보(9999) + 등급 정렬(주의 다수 뒤의 경고가 앞으로 와야 한다).
+    if (SCENARIO === 'facility-orphan') {
+      return json(200, [
+        ...[9006, 9009, 9010, 9016, 9018].map((assetId) => ({ assetId, severity: 'CAUTION', stale: false, collectedAt: collectedAt(), metrics: [] })),
+        { assetId: 9007, severity: 'MAJOR', stale: false, collectedAt: collectedAt(), metrics: [] },
+        { assetId: 9015, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [] },
+        { assetId: 9999, severity: 'CRITICAL', stale: false, collectedAt: collectedAt(), metrics: [] },
+      ])
+    }
+    return json(200, facilityStatuses())
+  }
+  if (/^\/api\/zones\/\d+\/facility-status$/.test(req.url ?? '')) {
     return json(404, { code: 'NOT_FOUND', message: '없음' })
   }
   // ZONE 3D 배치(E18). 미설정 ZONE 은 200 { grid: null, objects: [] }, 없는 id 는 404 — 실측과 동일.

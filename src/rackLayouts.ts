@@ -1,6 +1,9 @@
 import type {
   LayoutDirection,
   LayoutObject,
+  FacilityMetric,
+  FacilityStatus,
+  LayoutObjectAsset,
   RackAsset,
   RackSummary,
   RackUMap,
@@ -243,8 +246,10 @@ export type SceneObject = {
   id: string
   /** FMS 원값(모르는 종류도 그대로). */
   type: string
-  /** 표시명 — `label` 우선, 비었으면 `type`(§11-31 ①). 지어내지 않는다. */
+  /** 표시명 — `label` → 연결 자산 이름 → `type` 순(§11-31 ①). 지어내지 않는다. */
   label: string
+  /** 연결된 자산(E76). 있으면 상태 표시·클릭 상세가 붙고, `null` 이면 지금까지처럼 표지만 그린다. */
+  asset: LayoutObjectAsset | null
   /** FMS 2D 에디터 팔레트 색. 모르는 종류는 회색. */
   color: string
   /** 박스 높이(m). RACK 만 실치수(U 수) 기반이고 나머지는 rack3d 임의값이다. */
@@ -260,6 +265,8 @@ export type ZoneScene = {
   racks: RackData[]
   /** 랙이 아닌(또는 페어링되지 않은) 배치 오브젝트. */
   objects: SceneObject[]
+  /** 자산이 연결됐는데 좌표가 그리드 밖이라 그리지 못한 것. 그려지지 않아도 경보는 알려야 한다. */
+  unplacedFacilityAssets: LayoutObjectAsset[]
 }
 
 /**
@@ -377,10 +384,67 @@ export function objectColor(type: string): string {
   return LAYOUT_OBJECT_COLORS[type] ?? UNKNOWN_OBJECT_COLOR
 }
 
-/** 표시명 — `label` 우선, 비었으면 `type`. 둘 다 FMS 원값이다. */
+const nullableText = (value: unknown): string | null => (typeof value === 'string' && value.trim() ? value : null)
+
+/**
+ * `objects[].asset` 원값 → 연결 자산. **E76 계약(`assetId`)이 아니면 "연결 없음"이다.**
+ *
+ * E76 이전 FMS 는 이 자리에 `{id, code, ...}` 를 준다(실측 ZONE 19 의 DOOR). 그걸 연결로 읽으면
+ * 아직 없는 `facility-status` 를 30초마다 부르고 상단바가 "미갱신"으로 내려간다 — 그래서 FMS 와
+ * rack3d 를 어느 순서로 배포해도 되도록 계약 필드로만 판정한다.
+ */
+export function toObjectAsset(raw: unknown): LayoutObjectAsset | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const asset = raw as Record<string, unknown>
+  if (!Number.isInteger(asset.assetId) || (asset.assetId as number) <= 0) return null
+  return {
+    assetId: asset.assetId as number,
+    assetCode: nullableText(asset.assetCode),
+    name: nullableText(asset.name),
+    category: nullableText(asset.category),
+    monitoringType: nullableText(asset.monitoringType),
+  }
+}
+
+function toFacilityMetric(raw: unknown): FacilityMetric | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const { key, value, unit } = raw as Record<string, unknown>
+  if (typeof key !== 'string' || !key) return null
+  return {
+    key,
+    value: typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)) ? value : null,
+    unit: nullableText(unit),
+  }
+}
+
+/**
+ * `facility-status` 응답 정규화. **배열이 아니면 `null`**(호출부가 실패로 처리한다).
+ *
+ * 이 값은 30초마다 렌더로 바로 들어간다. 렌더 중 예외는 앱 전체를 내리므로(ErrorBoundary 없음),
+ * 형식이 어긋난 항목 하나가 화면을 지우지 않도록 여기서 거른다. 그리고 200 인데 모양이 다른 응답을
+ * 빈 목록으로 받으면 전 설비가 "상태 없음 · LIVE"로 보여 경보를 놓친다 — 그래서 실패로 돌린다.
+ * 등급은 대문자 enum 형태만 받는다. 새 등급은 통과시키고 객체·임의 문자열은 판정 없음으로 둔다.
+ */
+export function parseFacilityStatuses(raw: unknown): FacilityStatus[] | null {
+  if (!Array.isArray(raw)) return null
+  return raw.flatMap((item: unknown): FacilityStatus[] => {
+    if (typeof item !== 'object' || item === null) return []
+    const { assetId, severity, stale, collectedAt, metrics } = item as Record<string, unknown>
+    if (!Number.isInteger(assetId) || (assetId as number) <= 0) return []
+    return [{
+      assetId: assetId as number,
+      severity: typeof severity === 'string' && /^[A-Z][A-Z_]*$/.test(severity) ? severity as FacilityStatus['severity'] : null,
+      stale: stale === true,
+      collectedAt: typeof collectedAt === 'string' && Number.isFinite(Date.parse(collectedAt)) ? collectedAt : null,
+      metrics: Array.isArray(metrics) ? metrics.flatMap((metric: unknown) => toFacilityMetric(metric) ?? []) : [],
+    }]
+  })
+}
+
+/** 표시명 — `label` → 연결 자산 이름 → `type`. 전부 FMS 원값이다. */
 export function objectLabel(object: LayoutObject): string {
   const label = object.label?.trim()
-  return label ? label : object.type
+  return label ? label : toObjectAsset(object.asset)?.name ?? object.type
 }
 
 /**
@@ -481,6 +545,7 @@ export function buildZoneScene(
   /** locationId → 배치. 같은 랙을 가리키는 오브젝트가 둘이면 먼저 온 것만 랙에 붙인다. */
   const placementByLocationId = new Map<number, ScenePlacement>()
   const objects: SceneObject[] = []
+  const unplacedFacilityAssets: LayoutObjectAsset[] = []
   /**
    * 랙 목록을 아직 못 받았으면 `null` — 그때는 "페어링 불가"로 **단정하지 않는다.**
    * 단정하면 랙 목록이 도착하기 전까지 모든 랙이 박스로 그려졌다가 뒤집히는 깜빡임이 된다.
@@ -490,7 +555,11 @@ export function buildZoneScene(
   if (grid) {
     layout?.objects.forEach((object) => {
       const placement = toPlacement(object, grid)
-      if (!placement) return
+      if (!placement) {
+        const asset = toObjectAsset(object.asset)
+        if (asset) unplacedFacilityAssets.push(asset)
+        return
+      }
       const locationId = object.type === 'RACK' ? object.rack?.locationId ?? null : null
       const pairable = locationId !== null
         && (knownLocationIds === null || knownLocationIds.has(locationId))
@@ -503,6 +572,7 @@ export function buildZoneScene(
         id: `fms-layout-object-${object.id}`,
         type: object.type,
         label: objectLabel(object),
+        asset: toObjectAsset(object.asset),
         color: objectColor(object.type),
         heightM: objectHeightM(object),
         placement,
@@ -522,7 +592,7 @@ export function buildZoneScene(
     }
   })
 
-  return { grid, racks, objects }
+  return { grid, racks, objects, unplacedFacilityAssets }
 }
 
 // ── 씬 랙 객체 신원 유지 ─────────────────────────────────────────────────────
