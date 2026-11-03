@@ -818,8 +818,17 @@ function LayoutObjectMesh({
         **이름표 칩(테두리·점)이 팔레트 색의 최종 보증이다** — 모델을 쓰는 오브젝트는 받침대가
         모델에 가려질 수 있어서, 2D 에디터와의 색 대응이 여기에 남는다.
       */}
-      {/* 상태 정보는 글이 많아 거리에 따라 줄이면 읽을 수 없다. 이때만 화면 크기를 고정한다. */}
-      <Html position={[0, LAYOUT_OBJECT_BASE_Y + Math.max(heightM + elevation + 0.14, 0.62), 0]} center distanceFactor={status ? undefined : 8} zIndexRange={[1, 0]}>
+      {/*
+        상태 정보는 글이 많아 거리에 따라 줄이면 읽을 수 없다. 이때만 화면 크기를 고정한다.
+        ⚠️ `key` 로 다시 만든다 — drei 는 카메라가 움직일 때만 크기를 다시 계산해서, 보기를 바꿔도 멈춰 있으면 옛 크기가 남는다.
+      */}
+      <Html
+        key={status ? 'state' : 'name'}
+        position={[0, LAYOUT_OBJECT_BASE_Y + Math.max(heightM + elevation + 0.14, 0.62), 0]}
+        center
+        distanceFactor={status ? undefined : 8}
+        zIndexRange={[1, 0]}
+      >
         <div className={`layout-object-label${status ? ` has-status ${status.tone}` : ''}`} style={{ borderColor: object.color }}>
           <span className="layout-object-name">
             <i style={{ background: object.color }} />
