@@ -45,6 +45,7 @@ import {
   rackAvailableUnits,
   rackOccupancyPercent,
   collectFacilityAlarms,
+  facilityMetricsNote,
   facilityStatusView,
   severityLabel,
   severityToneColors,
@@ -1324,7 +1325,7 @@ function DataCenterScene({
   objects,
   focusedRack,
   selectedServer,
-  selectedFacilityId,
+  selectedFacilityAssetId,
   facilityStatusFor,
   heatmapVisuals,
   rackSeverities,
@@ -1336,7 +1337,7 @@ function DataCenterScene({
   grid: SceneGrid | null
   racks: RackData[]
   objects: SceneObject[]
-  selectedFacilityId: string | null
+  selectedFacilityAssetId: number | null
   facilityStatusFor: (object: SceneObject) => FacilityStatusView | null
   onSelectFacility: (object: SceneObject) => void
   focusedRack: RackData | null
@@ -1409,7 +1410,7 @@ function DataCenterScene({
             object={object}
             tileSize={grid.tileSize}
             status={facilityStatusFor(object)}
-            selected={selectedFacilityId === object.id}
+            selected={object.asset !== null && selectedFacilityAssetId === object.asset.assetId}
             onSelect={onSelectFacility}
           />
         ))}
@@ -1693,7 +1694,9 @@ function DataCenterLobby({
  */
 /** 계측값 표시 — `null` 은 0 이 아니라 값 없음이다(C6). 단위도 값이 있을 때만 붙인다. */
 function formatFacilityMetric(metric: FacilityMetric): string {
-  if (metric.value === null || metric.value === undefined) return NO_VALUE
+  if (metric.value === null) return NO_VALUE
+  // 접점. 어떤 접점이 경보인지는 FMS 판정(severity)이 말하므로 여기서 색이나 뜻을 붙이지 않는다.
+  if (typeof metric.value === 'boolean') return metric.value ? '켜짐' : '꺼짐'
   return metric.unit ? `${metric.value} ${metric.unit}` : String(metric.value)
 }
 
@@ -1743,11 +1746,11 @@ function FacilityDetailPanel({
         {metrics.length > 0 ? (
           <dl>
             {metrics.map((metric, index) => (
-              <div key={`${metric.key}-${index}`}><dt>{metric.key}</dt><dd>{formatFacilityMetric(metric)}</dd></div>
+              <div key={`${metric.key}-${index}`}><dt>{metric.name ?? metric.key}</dt><dd>{formatFacilityMetric(metric)}</dd></div>
             ))}
           </dl>
         ) : (
-          <p className="facility-empty">받은 계측값이 없습니다.</p>
+          <p className="facility-empty">{facilityMetricsNote(asset.monitoringType, status)}</p>
         )}
       </section>
     </>
@@ -2615,7 +2618,11 @@ function App() {
   const [selectedDataCenter, setSelectedDataCenter] = useState<ZoneSummary | null>(null)
   const [focusedRackId, setFocusedRackId] = useState<string | null>(null)
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null)
-  const [selectedFacilityId, setSelectedFacilityId] = useState<string | null>(null)
+  /**
+   * 오브젝트 id 가 아니라 **자산 id** 로 든다 — FMS 는 레이아웃을 저장할 때마다 오브젝트 id 를 새로 매긴다
+   * (전체 교체). 자산 → 오브젝트는 FMS 가 1:1 로 강제한다.
+   */
+  const [selectedFacilityAssetId, setSelectedFacilityAssetId] = useState<number | null>(null)
   const [facilityAlarmsExpanded, setFacilityAlarmsExpanded] = useState(false)
   const [dashboardOpen, setDashboardOpen] = useState(false)
   const [incidentMode, setIncidentMode] = useState(false)
@@ -2703,16 +2710,12 @@ function App() {
 
   /**
    * 설비 상태(E76) — 값이 바뀌는 데이터라 랙 목록과 같은 30초 폴링이다.
-   * **연결된 자산이 하나도 없으면 호출하지 않는다** — 보여줄 곳이 없는 데다, 이 API 가 없는
-   * 옛 FMS 에 붙어도 404 가 쌓이지 않는다.
+   * **3D 연결 유무와 상관없이 받는다.** 응답에는 배경 핀만 있는 자산도 섞여 있어, 연결이 하나도 없는
+   * ZONE 에서 건너뛰면 그 경보가 연결이 생기는 순간에야 나타난다. 그래서 FMS(E76)가 먼저 배포돼야 한다.
    */
-  const hasLinkedFacility = useMemo(
-    () => unplacedFacilityAssets.length > 0 || sceneObjects.some((object) => object.asset !== null),
-    [sceneObjects, unplacedFacilityAssets],
-  )
   const facilityFetcher = useMemo(
-    () => (sessionReady && selectedZoneId !== null && hasLinkedFacility ? () => fetchZoneFacilityStatus(selectedZoneId) : null),
-    [sessionReady, selectedZoneId, hasLinkedFacility],
+    () => (sessionReady && selectedZoneId !== null ? () => fetchZoneFacilityStatus(selectedZoneId) : null),
+    [sessionReady, selectedZoneId],
   )
   const facilityResource = usePolledResource(facilityFetcher, RACK_POLL_INTERVAL_MS)
   const facilityStatuses = facilityResource.data
@@ -2727,14 +2730,15 @@ function App() {
     object.asset ? facilityStatusView(facilityStatusById.get(object.asset.assetId), facilityFeedFailed) : null
   ), [facilityStatusById, facilityFeedFailed])
   const selectedFacility = useMemo(
-    () => (selectedFacilityId ? sceneObjects.find((object) => object.id === selectedFacilityId && object.asset) ?? null : null),
-    [sceneObjects, selectedFacilityId],
+    () => (selectedFacilityAssetId !== null ? sceneObjects.find((object) => object.asset?.assetId === selectedFacilityAssetId) ?? null : null),
+    [sceneObjects, selectedFacilityAssetId],
   )
   /** 경보 중인 설비 — 시야 밖이거나 3D 에 없어도 알 수 있도록 상단에 띄운다. 심각한 것부터. */
   const facilityAlarms = useMemo(
     () => collectFacilityAlarms(sceneObjects, unplacedFacilityAssets, facilityStatusById, facilityFeedFailed),
     [sceneObjects, unplacedFacilityAssets, facilityStatusById, facilityFeedFailed],
   )
+  const facilityAlarmCount = facilityAlarms.reduce((sum, alarm) => sum + alarm.count, 0)
 
   /**
    * 배치되지 않은 랙 — 3D에는 없지만 목록·검색·경보에는 있다. 수를 밝히지 않으면
@@ -2838,7 +2842,7 @@ function App() {
     racksResource.retryNow()
     uMapResource.retryNow()
     layoutResource.retryNow()
-    if (hasLinkedFacility) facilityResource.retryNow()
+    facilityResource.retryNow()
   }
 
   /** 상단바 "IN RACKS" — 랙 내 자산 합(가짜 0 방지 헬퍼 경유). */
@@ -2894,27 +2898,27 @@ function App() {
   const clearFocus = () => {
     setFocusedRackId(null)
     setSelectedServerId(null)
-    setSelectedFacilityId(null)
+    setSelectedFacilityAssetId(null)
     setIncidentMode(false)
   }
   const handleSelectFacility = (object: SceneObject) => {
     setFocusedRackId(null)
     setSelectedServerId(null)
-    setSelectedFacilityId(object.id)
+    setSelectedFacilityAssetId(object.asset?.assetId ?? null)
     setDashboardOpen(false)
     setIncidentMode(false)
   }
   const handleFocusRack = (rack: RackData) => {
     setFocusedRackId(rack.id)
     setSelectedServerId(null)
-    setSelectedFacilityId(null)
+    setSelectedFacilityAssetId(null)
     setDashboardOpen(false)
     setIncidentMode(false)
   }
   const handleSelectServer = (rack: RackData, server: ServerData) => {
     setFocusedRackId(rack.id)
     setSelectedServerId(server.id)
-    setSelectedFacilityId(null)
+    setSelectedFacilityAssetId(null)
     setDashboardOpen(false)
   }
   /** 경보 랙 탐색 — 대상은 FMS 판정이 정상이 아닌 랙이다. */
@@ -2926,7 +2930,7 @@ function App() {
     const normalizedIndex = (index % alertRacks.length + alertRacks.length) % alertRacks.length
     setFocusedRackId(alertRacks[normalizedIndex].rack.id)
     setSelectedServerId(null)
-    setSelectedFacilityId(null)
+    setSelectedFacilityAssetId(null)
     setDashboardOpen(false)
     setIncidentMode(true)
   }
@@ -3034,7 +3038,7 @@ function App() {
           className="viewport"
           title="마우스로 시점을 조작할 수 있습니다"
           onPointerDownCapture={(event) => {
-            if (event.button !== 2 || (!focusedRack && !selectedFacilityId)) return
+            if (event.button !== 2 || (!focusedRack && selectedFacilityAssetId === null)) return
             event.preventDefault()
             event.stopPropagation()
             clearFocus()
@@ -3054,7 +3058,7 @@ function App() {
               objects={sceneObjects}
               focusedRack={focusedRack}
               selectedServer={selectedServer}
-              selectedFacilityId={selectedFacilityId}
+              selectedFacilityAssetId={selectedFacilityAssetId}
               facilityStatusFor={facilityStatusFor}
               onSelectFacility={handleSelectFacility}
               heatmapVisuals={heatmapDataset.visuals}
@@ -3068,7 +3072,7 @@ function App() {
 
           {facilityAlarms.length > 0 && (
             <div className="facility-alarms" role="alert">
-              <strong>설비 경보 {facilityAlarms.length}</strong>
+              <strong>설비 경보 {facilityAlarmCount}</strong>
               {(facilityAlarmsExpanded ? facilityAlarms : facilityAlarms.slice(0, FACILITY_ALARMS_COLLAPSED)).map(({ key, label, view, object }) => (
                 object ? (
                   <button key={key} type="button" className={view.tone} onClick={() => handleSelectFacility(object)}>
@@ -3080,7 +3084,7 @@ function App() {
               ))}
               {facilityAlarms.length > FACILITY_ALARMS_COLLAPSED && (
                 <button type="button" className="more" onClick={() => setFacilityAlarmsExpanded((expanded) => !expanded)}>
-                  {facilityAlarmsExpanded ? '접기' : `외 ${facilityAlarms.length - FACILITY_ALARMS_COLLAPSED}건`}
+                  {facilityAlarmsExpanded ? '접기' : `외 ${facilityAlarms.slice(FACILITY_ALARMS_COLLAPSED).reduce((sum, alarm) => sum + alarm.count, 0)}건`}
                 </button>
               )}
             </div>
@@ -3170,7 +3174,7 @@ function App() {
         />
 
         <aside
-          key={selectedFacility?.id ?? selectedServer?.id ?? focusedRack?.id ?? 'navigation'}
+          key={selectedFacility?.asset ? `facility-${selectedFacility.asset.assetId}` : selectedServer?.id ?? focusedRack?.id ?? 'navigation'}
           className={selectedFacility ? 'controls-panel detail server-detail-panel' : focusedRack ? `controls-panel detail${selectedServer ? ' server-detail-panel' : ''}` : 'controls-panel'}
         >
           {selectedFacility?.asset ? (

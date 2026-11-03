@@ -328,36 +328,54 @@ export type FacilityTone = SeverityTone | 'stale' | 'unknown'
 export type FacilityStatusView = {
   tone: FacilityTone
   label: string
-  /** 경보(정상이 아닌 FMS 판정). 통신두절·상태 없음은 경보가 아니다 — 판정이 없기 때문이다. */
+  /** 경보(정상이 아닌 FMS 판정). 통신 이상·미수집·상태 없음은 경보가 아니다 — 판정이 없기 때문이다. */
   alarm: boolean
 }
 
 /**
- * 설비 상태 표시. **FMS 가 "정상"이라고 답한 경우에만 정상으로 보인다.**
+ * 설비 상태 표시. **값을 받아 FMS 가 "정상"으로 판정한 경우에만 정상으로 보인다.**
  *
  * 관제 화면에서 가장 나쁜 실수는 모르는 것을 초록으로 칠하는 것이다. 그래서 응답에 없음·판정 없음·
- * 통신두절·갱신 실패를 전부 정상과 다른 상태로 둔다. 반대로 경보는 어떤 경우에도 숨기지 않는다 —
- * 통신두절이나 갱신 실패가 겹쳐도 마지막 경보 판정을 그대로 보여주고 사실을 덧붙인다.
+ * 통신 이상·갱신 실패를 전부 정상과 다른 상태로 둔다. FMS 는 수집 전·비수집 자산도 `NORMAL` 로 주므로
+ * (E76 계약) 수신 이력(`collectedAt`)이 없으면 `미수집` 이다. 반대로 경보는 어떤 경우에도 숨기지 않는다 —
+ * 통신 이상이나 갱신 실패가 겹쳐도 마지막 경보 판정을 그대로 보여주고 사실을 덧붙인다.
  *
  * @param feedFailed `facility-status` 를 지금 못 받고 있으면 `true`(`status` 는 마지막으로 받은 값).
  */
 export function facilityStatusView(status: FacilityStatus | undefined, feedFailed: boolean): FacilityStatusView {
   const severity = status?.severity ?? null
-  const qualifier = feedFailed ? '미갱신' : status?.stale ? '통신두절' : null
+  const qualifier = feedFailed ? '미갱신' : status?.stale ? '통신 이상' : null
   if (severity !== null && severity !== 'NORMAL') {
     const label = severityLabel(severity)
     // 모르는 등급(C5)을 정상처럼 보이게 두지 않는다.
     return { tone: severityTones[severity] ?? 'warning', label: qualifier ? `${label} · ${qualifier}` : label, alarm: true }
   }
   if (feedFailed) return { tone: 'unknown', label: '상태 미갱신', alarm: false }
-  if (status?.stale) return { tone: 'stale', label: '통신두절', alarm: false }
-  if (severity === 'NORMAL') return { tone: 'normal', label: severityLabel(severity), alarm: false }
+  if (status?.stale) return { tone: 'stale', label: '통신 이상', alarm: false }
+  if (severity === 'NORMAL') {
+    return status?.collectedAt
+      ? { tone: 'normal', label: severityLabel(severity), alarm: false }
+      : { tone: 'unknown', label: '미수집', alarm: false }
+  }
   return { tone: 'unknown', label: '상태 없음', alarm: false }
+}
+
+/** 측정값을 항상 싣는 수집 유형(E76 계약). 이 유형인데 `metrics` 가 비었으면 권한이 없는 것이다. */
+const METRIC_MONITORING_TYPES = new Set(['TH', 'HVAC', 'UPS', 'DPM', 'LEAK', 'FIRE'])
+
+/** `metrics` 가 비었을 때의 안내. "권한 없음"과 "원래 없음"을 섞으면 운영자가 엉뚱한 곳을 찾는다. */
+export function facilityMetricsNote(monitoringType: string | null, status: FacilityStatus | undefined): string {
+  if (!status) return '받은 측정값이 없습니다.'
+  return monitoringType !== null && METRIC_MONITORING_TYPES.has(monitoringType)
+    ? '측정값을 볼 권한이 없습니다(종합관제 또는 성능 지표 조회 권한 필요).'
+    : '이 설비는 측정값을 제공하지 않습니다.'
 }
 
 export type FacilityAlarm = {
   key: string
   label: string
+  /** 이 항목이 묶고 있는 경보 수. 3D 에 연결되지 않은 자산은 한 줄로 묶는다. */
+  count: number
   view: FacilityStatusView
   /** 3D 에 있으면 그 오브젝트. `null` 이면 그릴 곳이 없어 눌러도 갈 곳이 없다. */
   object: SceneObject | null
@@ -370,9 +388,9 @@ const facilityAlarmRank = (severity: RackSeverity | null | undefined): number =>
 }
 
 /**
- * 경보 목록. **3D 에 그려진 것만 세지 않는다.** 그리드 밖 좌표이거나 배치에 연결되지 않은 자산의
- * 경보도 응답에 있으면 전부 올린다 — 안 그러면 심각 경보가 씬·상단바 어디에도 없이 사라진다
- * (배치되지 않은 랙을 조용히 빼지 않는 것과 같은 규칙이다).
+ * 경보 목록. **3D 에 그려진 것만 세지 않는다.** 응답에는 3D 에 없는 자산(배경 핀만 있는 것·그리드 밖
+ * 좌표)도 있는데, 그 경보를 버리면 심각 경보가 씬·상단바 어디에도 없이 사라진다(배치되지 않은 랙을
+ * 조용히 빼지 않는 것과 같은 규칙이다). 이름을 모르는 자산은 id 를 화면에 내지 않고 한 줄로 묶는다.
  */
 export function collectFacilityAlarms(
   objects: SceneObject[],
@@ -387,16 +405,23 @@ export function collectFacilityAlarms(
     shown.add(object.asset.assetId)
     const status = statuses.get(object.asset.assetId)
     const view = facilityStatusView(status, feedFailed)
-    if (view.alarm) alarms.push({ alarm: { key: object.id, label: object.label, view, object }, rank: facilityAlarmRank(status?.severity) })
+    if (view.alarm) alarms.push({ alarm: { key: object.id, label: object.label, count: 1, view, object }, rank: facilityAlarmRank(status?.severity) })
   })
   const unplacedNames = new Map(unplacedAssets.map((asset) => [asset.assetId, asset.name]))
+  const unnamed: { view: FacilityStatusView; rank: number }[] = []
   statuses.forEach((status, assetId) => {
     if (shown.has(assetId)) return
     const view = facilityStatusView(status, feedFailed)
     if (!view.alarm) return
-    const name = unplacedNames.get(assetId) ?? `자산 ${assetId}`
-    alarms.push({ alarm: { key: `asset-${assetId}`, label: `${name} (3D 미배치)`, view, object: null }, rank: facilityAlarmRank(status.severity) })
+    const rank = facilityAlarmRank(status.severity)
+    const name = unplacedNames.get(assetId)
+    if (name) alarms.push({ alarm: { key: `asset-${assetId}`, label: `${name} (3D 미배치)`, count: 1, view, object: null }, rank })
+    else unnamed.push({ view, rank })
   })
+  if (unnamed.length > 0) {
+    const worst = unnamed.reduce((a, b) => (b.rank < a.rank ? b : a))
+    alarms.push({ alarm: { key: 'unlinked-assets', label: `3D 미연결 설비 ${unnamed.length}건`, count: unnamed.length, view: worst.view, object: null }, rank: worst.rank })
+  }
   return alarms.sort((a, b) => a.rank - b.rank).map(({ alarm }) => alarm)
 }
 

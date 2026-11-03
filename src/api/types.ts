@@ -251,10 +251,13 @@ export type LayoutObjectAsset = {
   monitoringType: string | null
 }
 
-/** 설비 계측값 1건. `value` 는 FMS 원값이고, 없으면 `null` 이다(0 으로 치환 금지, C6). */
+/** 설비 계측값 1건. `value` 는 FMS 원값이고, 없으면 `null` 이다(0·false 로 치환 금지, C6). */
 export type FacilityMetric = {
   key: string
-  value: number | string | null
+  /** FMS 지표 사전의 표시명. 화면에는 `key` 가 아니라 이것을 쓴다. */
+  name: string | null
+  /** NUMERIC = 숫자, 접점 = true/false, TEXT = 문자열. */
+  value: number | boolean | string | null
   unit: string | null
 }
 
@@ -262,12 +265,17 @@ export type FacilityMetric = {
  * `GET /api/zones/{zoneId}/facility-status` 의 원소(ASSET READ, netis-fms E76).
  *
  * `severity` 는 **FMS 판정**이다 — rack3d 가 계측값으로 다시 판정하지 않는다.
- * 없으면 `null` 이고, 그때 화면은 "정상"이 아니라 "상태 없음"이어야 한다.
+ *
+ * ⚠️ **수집 전·비수집 자산도 `NORMAL` 로 온다**(E76 계약). 그래서 `collectedAt` 이 `null` 이면
+ * NORMAL 이어도 정상으로 그리지 않는다 — {@link facilityStatusView}.
+ *
+ * `metrics` 는 호출자에게 DASHBOARD 또는 PERFORMANCE 조회 권한이 있을 때만 채워진다.
+ * 대상 자산에는 3D 오브젝트가 없는 배경 핀 자산도 섞여 있다.
  */
 export type FacilityStatus = {
   assetId: number
   severity: RackSeverity | null
-  /** 통신두절. */
+  /** 통신 이상 — 수신 지연 또는 두절(FMS 판정). */
   stale: boolean
   collectedAt: string | null
   metrics: FacilityMetric[]

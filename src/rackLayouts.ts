@@ -389,9 +389,8 @@ const nullableText = (value: unknown): string | null => (typeof value === 'strin
 /**
  * `objects[].asset` 원값 → 연결 자산. **E76 계약(`assetId`)이 아니면 "연결 없음"이다.**
  *
- * E76 이전 FMS 는 이 자리에 `{id, code, ...}` 를 준다(실측 ZONE 19 의 DOOR). 그걸 연결로 읽으면
- * 아직 없는 `facility-status` 를 30초마다 부르고 상단바가 "미갱신"으로 내려간다 — 그래서 FMS 와
- * rack3d 를 어느 순서로 배포해도 되도록 계약 필드로만 판정한다.
+ * E76 이전 FMS 는 이 자리에 `{id, code, ...}` 만 준다. 상태는 `assetId` 로 잇기 때문에 계약 필드가
+ * 없는 연결은 이을 수 없고, 칩을 달아도 "상태 없음"뿐이라 연결 없음으로 둔다.
  */
 export function toObjectAsset(raw: unknown): LayoutObjectAsset | null {
   if (typeof raw !== 'object' || raw === null) return null
@@ -408,13 +407,10 @@ export function toObjectAsset(raw: unknown): LayoutObjectAsset | null {
 
 function toFacilityMetric(raw: unknown): FacilityMetric | null {
   if (typeof raw !== 'object' || raw === null) return null
-  const { key, value, unit } = raw as Record<string, unknown>
+  const { key, name, value, unit } = raw as Record<string, unknown>
   if (typeof key !== 'string' || !key) return null
-  return {
-    key,
-    value: typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)) ? value : null,
-    unit: nullableText(unit),
-  }
+  const known = typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
+  return { key, name: nullableText(name), value: known ? value : null, unit: nullableText(unit) }
 }
 
 /**

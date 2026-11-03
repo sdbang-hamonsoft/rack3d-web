@@ -196,28 +196,39 @@ for (let i = 0; i < EXTRA_RACKS; i += 1) {
 const layoutObject = (o) => withFacilityAssets({ dir: 'NORTH', label: '', rack: null, asset: null, ...o })
 
 /**
- * 시설 핀 자산 연결(netis-fms E76). 레이아웃 오브젝트 id → 자산.
+ * 시설 핀 자산 연결(netis-fms E76, 계약: 그 저장소 `docs/E76-rack3d-facility-status-api.md`). 레이아웃 오브젝트 id → 자산.
  * `SCENARIO=facility-legacy` 는 E76 이전 FMS 재현이다 — `{id, code}` 형태라 연결 없음으로 읽혀야 하고
- * `facility-status` 호출이 한 건도 나가지 않아야 한다.
+ * `facility-status` 는 404 라 상단에 `설비 상태 미갱신` 이 뜬다(FMS 를 먼저 배포해야 하는 이유).
  */
+const facilityAsset = (assetId, assetCode, name, category, monitoringType) => ({
+  assetId, assetCode, name, category, monitoringType,
+  // 계약상 기존 필드도 같은 값으로 함께 온다.
+  id: assetId, code: assetCode, images: { front: null, rear: null },
+})
 const facilityAssetByObjectId = {
-  6: { assetId: 9006, assetCode: 'CRAC-01', name: '항온항습기 #1', category: 'CRAC', monitoringType: 'MODBUS' },
-  7: { assetId: 9007, assetCode: 'UPS-01', name: 'UPS #1', category: 'UPS', monitoringType: 'SNMP' },
-  9: { assetId: 9009, assetCode: 'TH-01', name: '온습도 센서 #1', category: 'SENSOR', monitoringType: 'TH' },
-  10: { assetId: 9010, assetCode: 'DOOR-01', name: '방화문', category: 'DOOR', monitoringType: null },
-  15: { assetId: 9015, assetCode: 'LEAK-01', name: '누수감지 #1', category: 'SENSOR', monitoringType: 'DI' },
-  16: { assetId: 9016, assetCode: 'CCTV-01', name: 'CCTV #1', category: 'CCTV', monitoringType: null },
-  18: { assetId: 9018, assetCode: 'FIRE-01', name: '화재감지 #1', category: 'SENSOR', monitoringType: 'DI' },
+  6: facilityAsset(9006, 'CRAC-01', '항온항습기 #1', 'HVAC', 'HVAC'),
+  7: facilityAsset(9007, 'UPS-01', 'UPS #1', 'POWER', 'UPS'),
+  9: facilityAsset(9009, 'TH-01', '온습도 센서 #1', 'SENSOR', 'TH'),
+  10: facilityAsset(9010, 'DOOR-01', '방화문', 'SECURITY', 'ACCESS'),
+  15: facilityAsset(9015, 'LEAK-01', '누수감지 #1', 'SENSOR', 'LEAK'),
+  16: facilityAsset(9016, 'CCTV-01', 'CCTV #1', 'CCTV', null),
+  18: facilityAsset(9018, 'FIRE-01', '화재감지 #1', 'SENSOR', 'FIRE'),
 }
 const collectedAt = () => new Date().toISOString()
-/** 표시 분기마다 1건씩: 정상 / 주의+통신두절 / 통신두절 / 판정 없음 / 심각 / 응답에 없음(CCTV) / 정상+값 없음. */
+const metric = (key, name, value, unit = null) => ({ key, name, value, unit })
+/**
+ * E76 계약 예시 형태. 표시 분기마다 1건씩: 정상 / 주의+통신 이상 / 통신 이상 / 출입(측정값 없음) /
+ * 심각 / 비수집 NORMAL(CCTV → 미수집) / 응답에 없음(화재) / 3D 에 없는 핀 자산(경보 1·정상 1).
+ */
 const facilityStatuses = () => [
-  { assetId: 9006, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [{ key: 'supplyTemp', value: 18.4, unit: '°C' }, { key: 'returnTemp', value: 24.1, unit: '°C' }] },
-  { assetId: 9007, severity: 'CAUTION', stale: true, collectedAt: '2026-11-03T01:00:00Z', metrics: [{ key: 'loadPct', value: 62, unit: '%' }] },
-  { assetId: 9009, severity: 'NORMAL', stale: true, collectedAt: '2026-11-03T01:00:00Z', metrics: [{ key: 'temp', value: null, unit: '°C' }] },
-  { assetId: 9010, severity: null, stale: false, collectedAt: null, metrics: [] },
-  { assetId: 9015, severity: 'CRITICAL', stale: false, collectedAt: collectedAt(), metrics: [{ key: 'leak', value: 'DETECTED', unit: null }] },
-  { assetId: 9018, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [] },
+  { assetId: 9006, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [metric('operating_state', '운전상태', '송풍, 냉방'), metric('run_state', '가동 상태', null), metric('temp', '실내온도', 22, '℃'), metric('humidity', '실내습도', 45, '%'), metric('alm_filter_clog', '필터막힘 경보', true), metric('alm_sensor', '센서 경보', false)] },
+  { assetId: 9007, severity: 'CAUTION', stale: true, collectedAt: '2026-11-03T01:00:00Z', metrics: [metric('battery_soc', '배터리 잔량', 62, '%')] },
+  { assetId: 9009, severity: 'NORMAL', stale: true, collectedAt: '2026-11-03T01:00:00Z', metrics: [metric('temp', '온도', null, '℃'), metric('humidity', '습도', 0, '%')] },
+  { assetId: 9010, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [] },
+  { assetId: 9015, severity: 'CRITICAL', stale: false, collectedAt: collectedAt(), metrics: [metric('leak_detected', '누수감지', true)] },
+  { assetId: 9016, severity: 'NORMAL', stale: false, collectedAt: null, metrics: [] },
+  { assetId: 9100, severity: 'MAJOR', stale: false, collectedAt: collectedAt(), metrics: [] },
+  { assetId: 9101, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [] },
 ]
 const withFacilityAssets = (object) => {
   const asset = facilityAssetByObjectId[object.id]
@@ -358,11 +369,13 @@ createServer((req, res) => {
   if (req.url === '/api/zones/101/facility-status') {
     if (SCENARIO === 'facility-fail') return json(500, { code: 'INTERNAL_ERROR', message: '실패' })
     if (SCENARIO === 'facility-legacy') return json(404, { code: 'NOT_FOUND', message: '없음' })
+    // DASHBOARD·PERFORMANCE 조회 권한 없는 계정 — 수집 유형이면 "권한 없음", 아니면 "제공하지 않음" 안내.
+    if (SCENARIO === 'facility-no-metrics') return json(200, facilityStatuses().map((s) => ({ ...s, metrics: [] })))
     // 200 인데 모양이 다르다 — "상태 없음 · LIVE" 가 아니라 실패로 보여야 한다.
     if (SCENARIO === 'facility-wrapped') return json(200, { content: facilityStatuses() })
     // 깨진 항목이 섞였다 — 앱이 내려가지 않아야 하고 멀쩡한 항목은 그대로 나와야 한다.
     if (SCENARIO === 'facility-malformed') {
-      return json(200, [null, 7, { assetId: 'x' }, { assetId: 9015, severity: { a: 1 }, metrics: [null, { key: 'leak', value: { b: 2 } }] }, ...facilityStatuses().filter((s) => s.assetId !== 9015)])
+      return json(200, [null, 7, { assetId: 'x' }, { assetId: 9015, severity: { a: 1 }, metrics: [null, { key: 'leak_detected', name: '누수감지', value: { b: 2 } }] }, ...facilityStatuses().filter((s) => s.assetId !== 9015)])
     }
     // 3D 에 없는 자산의 경보(9999) + 등급 정렬(주의 다수 뒤의 경고가 앞으로 와야 한다).
     if (SCENARIO === 'facility-orphan') {
@@ -370,6 +383,7 @@ createServer((req, res) => {
         ...[9006, 9009, 9010, 9016, 9018].map((assetId) => ({ assetId, severity: 'CAUTION', stale: false, collectedAt: collectedAt(), metrics: [] })),
         { assetId: 9007, severity: 'MAJOR', stale: false, collectedAt: collectedAt(), metrics: [] },
         { assetId: 9015, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [] },
+        { assetId: 9998, severity: 'CAUTION', stale: false, collectedAt: collectedAt(), metrics: [] },
         { assetId: 9999, severity: 'CRITICAL', stale: false, collectedAt: collectedAt(), metrics: [] },
       ])
     }
