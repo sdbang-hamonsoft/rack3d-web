@@ -193,68 +193,7 @@ for (let i = 0; i < EXTRA_RACKS; i += 1) {
  * 안전하게 넘어가야 하고, 절대 씬이 깨지면 안 된다.
  * `label: ''` 인 건은 표시명이 `type` 으로 대체되는지 본다.
  */
-const layoutObject = (o) => withFacilityAssets({ dir: 'NORTH', label: '', rack: null, asset: null, ...o })
-
-/**
- * 시설 핀 자산 연결(netis-fms E76, 계약: 그 저장소 `docs/E76-rack3d-facility-status-api.md`). 레이아웃 오브젝트 id → 자산.
- * `SCENARIO=facility-legacy` 는 E76 이전 FMS 재현이다 — `{id, code}` 형태라 연결 없음으로 읽혀야 하고
- * `facility-status` 호출이 한 건도 나가지 않아야 한다.
- */
-const facilityAsset = (assetId, assetCode, name, category, monitoringType) => ({
-  assetId, assetCode, name, category, monitoringType,
-  // 계약상 기존 필드도 같은 값으로 함께 온다.
-  id: assetId, code: assetCode, images: { front: null, rear: null },
-})
-const facilityAssetByObjectId = {
-  6: facilityAsset(9006, 'CRAC-01', '항온항습기 #1', 'HVAC', 'HVAC'),
-  7: facilityAsset(9007, 'UPS-01', 'UPS #1', 'POWER', 'UPS'),
-  9: facilityAsset(9009, 'TH-01', '온습도 센서 #1', 'SENSOR', 'TH'),
-  10: facilityAsset(9010, 'DOOR-01', '방화문', 'SECURITY', 'ACCESS'),
-  15: facilityAsset(9015, 'LEAK-01', '3F 누수 감지 센서 케이블', 'SENSOR', 'LEAK'),
-  16: facilityAsset(9016, 'CCTV-01', 'CCTV #1', 'CCTV', null),
-  18: facilityAsset(9018, 'FIRE-01', '화재감지 #1', 'SENSOR', 'FIRE'),
-}
-const collectedAt = () => new Date().toISOString()
-const metric = (key, name, value, unit = null) => ({ key, name, value, unit })
-/**
- * E76 계약 예시 형태. 표시 분기마다 1건씩: 정상 / 주의+통신 이상 / 통신 이상 / 출입(측정값 없음) /
- * 심각 / 비수집 NORMAL(CCTV → 미수집) / 응답에 없음(화재) / 핀만 있는 자산(경보 1·정상 1, 대략 위치).
- */
-const facilityMeta = Object.fromEntries(Object.values(facilityAssetByObjectId).map((a) => [a.assetId, a]))
-/** 배경 핀(그림 비율). 연결된 자산의 핀은 무시돼야 하고(9015), 9100·9101 은 핀만 있어 대략 위치로 나온다. */
-const facilityPins = { 9015: { x: 0.1, y: 0.1 }, 9100: { x: 0.55, y: 0.5 }, 9101: { x: 0.2, y: 0.9 }, 9102: { x: 0.21, y: 0.91 } }
-const pinOnlyMeta = {
-  9100: { assetCode: 'TH-07', name: '온습도 센서 #7', category: 'SENSOR', monitoringType: 'TH' },
-  9101: { assetCode: 'LEAK-03', name: '누수감지 #3', category: 'SENSOR', monitoringType: 'LEAK' },
-  9102: { assetCode: 'TH-08', name: '온습도 센서 #8', category: 'SENSOR', monitoringType: 'TH' },
-}
-const facilityComm = { 9007: 'STALE', 9009: 'OFFLINE', 9016: 'UNKNOWN', 9101: 'UNKNOWN' }
-const facilityStatuses = () => facilityStatusRows().map((row) => {
-  const { assetCode, name, category, monitoringType } = facilityMeta[row.assetId] ?? pinOnlyMeta[row.assetId]
-  return {
-    assetCode, name, category, monitoringType,
-    pin: facilityPins[row.assetId] ?? null,
-    layoutLinked: row.assetId in facilityMeta,
-    commStatus: facilityComm[row.assetId] ?? 'ONLINE',
-    ...row,
-  }
-})
-const facilityStatusRows = () => [
-  { assetId: 9006, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [metric('operating_state', '운전상태', '송풍, 냉방'), metric('run_state', '가동 상태', null), metric('temp', '실내온도', 22, '℃'), metric('humidity', '실내습도', 45, '%'), metric('alm_filter_clog', '필터막힘 경보', true), metric('alm_sensor', '센서 경보', false)] },
-  { assetId: 9007, severity: 'CAUTION', stale: true, collectedAt: '2026-11-03T01:00:00Z', metrics: [metric('battery_soc', '배터리 잔량', 62, '%')] },
-  { assetId: 9009, severity: 'NORMAL', stale: true, collectedAt: '2026-11-03T01:00:00Z', metrics: [metric('temp', '온도', null, '℃'), metric('humidity', '습도', 0, '%')] },
-  { assetId: 9010, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [] },
-  { assetId: 9015, severity: 'CRITICAL', stale: false, collectedAt: collectedAt(), metrics: [metric('leak_detected', '누수감지', true)] },
-  { assetId: 9016, severity: 'NORMAL', stale: false, collectedAt: null, metrics: [] },
-  { assetId: 9100, severity: 'MAJOR', stale: false, collectedAt: collectedAt(), metrics: [metric('temp', '온도', 31.2, '℃'), metric('humidity', '습도', 44, '%')] },
-  { assetId: 9101, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [metric('leak_detected', '누수감지', false)] },
-  { assetId: 9102, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [metric('temp', '온도', 23.5, '℃')] },
-]
-const withFacilityAssets = (object) => {
-  const asset = facilityAssetByObjectId[object.id]
-  if (!asset) return object
-  return { ...object, asset: SCENARIO === 'facility-legacy' ? { id: asset.assetId, code: asset.assetCode, name: asset.name } : asset }
-}
+const layoutObject = (o) => ({ dir: 'NORTH', label: '', rack: null, asset: null, ...o })
 
 const layoutObjects = [
   layoutObject({ id: 1, type: 'RACK', x: 2, z: 2, dir: 'NORTH', label: 'A-01', rack: { locationId: 11, name: 'A-01', code: 'A01', rackUnits: 42 } }),
@@ -383,23 +322,6 @@ createServer((req, res) => {
   }
   // 랙 없는 ZONE은 200 [], 없는 ZONE은 404 (실 FMS 실측과 동일)
   if (/^\/api\/zones\/\d+\/u-maps$/.test(req.url ?? '')) {
-    return json(404, { code: 'NOT_FOUND', message: '없음' })
-  }
-  // ZONE 시설 상태(netis-fms E76). 없는 ZONE 은 404.
-  if (req.url === '/api/zones/101/facility-status') {
-    if (SCENARIO === 'facility-fail') return json(500, { code: 'INTERNAL_ERROR', message: '실패' })
-    if (SCENARIO === 'facility-legacy') return json(404, { code: 'NOT_FOUND', message: '없음' })
-    // DASHBOARD·PERFORMANCE 조회 권한 없는 계정 — 수집 유형이면 "권한 없음", 아니면 "제공하지 않음" 안내.
-    if (SCENARIO === 'facility-no-metrics') return json(200, facilityStatuses().map((s) => ({ ...s, metrics: [] })))
-    // 200 인데 모양이 다르다 — "상태 없음 · LIVE" 가 아니라 실패로 보여야 한다.
-    if (SCENARIO === 'facility-wrapped') return json(200, { content: facilityStatuses() })
-    // 깨진 항목이 섞였다 — 앱이 내려가지 않아야 하고 멀쩡한 항목은 그대로 나와야 한다.
-    if (SCENARIO === 'facility-malformed') {
-      return json(200, [null, 7, { assetId: 'x' }, { assetId: 9015, severity: { a: 1 }, metrics: [null, { key: 'leak_detected', name: '누수감지', value: { b: 2 } }] }, ...facilityStatuses().filter((s) => s.assetId !== 9015)])
-    }
-    return json(200, facilityStatuses())
-  }
-  if (/^\/api\/zones\/\d+\/facility-status$/.test(req.url ?? '')) {
     return json(404, { code: 'NOT_FOUND', message: '없음' })
   }
   // ZONE 3D 배치(E18). 미설정 ZONE 은 200 { grid: null, objects: [] }, 없는 id 는 404 — 실측과 동일.

@@ -4,12 +4,10 @@
  * 이 파일 밖에서 `api.get('/...')`을 직접 부르지 않는다 — 경로·권한·스코프 규약을 한 곳에 모은다.
  */
 
-import { parseFacilityStatuses } from '../rackLayouts'
 import { ApiError, api, NETWORK_ERROR_STATUS } from './client'
 import type {
   AssetImageView,
   AssetImages,
-  FacilityStatus,
   MeResponse,
   RackSummary,
   RackUMap,
@@ -83,25 +81,6 @@ export function fetchZoneLayout(zoneId: number): Promise<ZoneLayout> {
     return Promise.reject(new ApiError(NETWORK_ERROR_STATUS, 'INVALID_ZONE_ID'))
   }
   return api.get<ZoneLayout>(`/layouts/zones/${zoneId}/layout`)
-}
-
-/**
- * `GET /api/zones/{zoneId}/facility-status` — 장치 이름표 아래 상태 정보 (ASSET READ, netis-fms E76).
- *
- * 값이 바뀌는 데이터라 랙 목록과 같은 30초 폴링으로 받는다. 스코프 밖·없는 ZONE 은 `404`.
- *
- * C5 신뢰 경계: `zoneId`는 **sidebar 응답이 준 id만** 넘긴다.
- */
-export function fetchZoneFacilityStatus(zoneId: number): Promise<FacilityStatus[]> {
-  if (!Number.isInteger(zoneId) || zoneId <= 0) {
-    return Promise.reject(new ApiError(NETWORK_ERROR_STATUS, 'INVALID_ZONE_ID'))
-  }
-  return api.get<unknown>(`/zones/${zoneId}/facility-status`).then((raw) => {
-    const statuses = parseFacilityStatuses(raw)
-    // 200 인데 모양이 다르면 실패다. 빈 목록으로 받으면 경보가 "상태 없음 · LIVE"로 묻힌다.
-    if (!statuses) throw new ApiError(200, 'INVALID_RESPONSE')
-    return statuses
-  })
 }
 
 // ── 장비 실물 사진(E17) ──────────────────────────────────────────────────────

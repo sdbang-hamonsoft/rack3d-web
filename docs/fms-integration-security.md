@@ -1587,3 +1587,11 @@ FMS 권고와 다르게 둔 것:
 - 데이터는 `facility-status` 30초 폴링. 연결된 자산이 없으면 호출하지 않아 FMS 배포 순서에 묶이지 않는다. 연결이 새로 생기면 "지금 새로고침"으로 반영된다.
 - 이름표 칩은 전과 같이 클릭을 받지 않는다.
 
+## 11-48. 이름표 상태 정보도 보류, 되돌리기만 (2026-11-03, netis-fms 방 전달)
+
+요청자 확인이 끝나지 않아 사용자 지시로 새 기능을 보류했다. `main` 의 `src/`·`scripts/` 를 E76 이전(`c85c1dd`)으로 되돌렸다. `main-188c9b1` 과 `src/`·`scripts/` 가 같다.
+§11-45~47 의 구현은 현재 `main` 에 없다. 이름표 상태 정보는 브랜치 `feature/e76-device-label-status` 에 있고, 핀 카드는 커밋 `d2fe01a` 에 있다.
+FMS `facility-status` API 는 그대로 남지만 rack3d 는 호출하지 않는다.
+
+운영 되돌리기: `ssh buru-ext '~/cicd/rack3d/deploy.sh main-188c9b1'` — 사용자 승인 후 실행하고 여기 결과를 적는다.
+

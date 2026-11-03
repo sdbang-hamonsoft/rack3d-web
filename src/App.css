@@ -960,30 +960,6 @@ kbd { font-size: 13px; }
 .layout-object-label i { width: 7px; height: 7px; border-radius: 1px; }
 [data-theme="light"] .layout-object-label { background: #ffffffe8; color: #23394a; }
 
-/* E76 — 장치 이름 아래 상태 정보. 칩 테두리·점(팔레트 색)은 그대로 두고 상태는 글로 말한다. */
-.layout-object-name { display: flex; align-items: center; gap: 6px; }
-.layout-object-label.has-status { flex-direction: column; align-items: flex-start; gap: 2px; }
-.layout-object-label small, .layout-object-label b { display: block; font: 600 8px/1.35 ui-monospace, monospace; letter-spacing: .02em; }
-.layout-object-label small { color: #9fb4c7; }
-.layout-object-label b { color: #d8e6f0; }
-.layout-object-label.danger b { color: #ff4d8d; }
-.layout-object-label.warning b { color: #ffb724; }
-.layout-object-label.muted b { color: #8fa6b7; }
-.layout-object-label.danger { box-shadow: 0 0 0 1px #eb0058, 0 0 12px #eb005899; }
-.layout-object-label.warning { box-shadow: 0 0 0 1px #ffb724; }
-[data-theme="light"] .layout-object-label small { color: #52687a; }
-[data-theme="light"] .layout-object-label b { color: #23394a; }
-[data-theme="light"] .layout-object-label.danger b { color: #c0243a; }
-[data-theme="light"] .layout-object-label.warning b { color: #8a5c00; }
-[data-theme="light"] .layout-object-label.muted b { color: #52687a; }
-
-.object-label-toggle { position: absolute; left: 22px; bottom: 18px; z-index: 3; padding: 7px 10px; border: 1px solid #25394d; border-radius: 3px; background: #0b1722e6; color: #a8c0d1; font: 600 10px/1.4 ui-monospace, monospace; letter-spacing: .06em; cursor: pointer; }
-.object-label-toggle:hover { border-color: #3e91b7; color: #fff; }
-.object-label-toggle[aria-pressed="false"] { color: #6f8799; }
-[data-theme="light"] .object-label-toggle { border-color: #b4c6d1; background: #ffffffe8; color: #33505f; }
-[data-theme="light"] .object-label-toggle:hover { border-color: #17627f; color: #17627f; }
-@media (max-width: 720px) { .object-label-toggle { left: 12px; bottom: 12px; } }
-
 /*
   E18 ⑤ — 레이아웃 미설정·미배치 안내. 한 줄짜리 상태 문구와 달리 "무엇을 어디서 해야
   하는가"까지 말해야 하므로 세로로 쌓는다(실측 8 ZONE 중 6개에서 실제로 뜨는 화면이다).
