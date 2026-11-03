@@ -413,6 +413,14 @@ function toFacilityMetric(raw: unknown): FacilityMetric | null {
   return { key, name: nullableText(name), value: known ? value : null, unit: nullableText(unit) }
 }
 
+function toFacilityPin(raw: unknown): FacilityStatus['pin'] {
+  if (typeof raw !== 'object' || raw === null) return null
+  const { x, y } = raw as Record<string, unknown>
+  if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) return null
+  const clamp = (value: number) => Math.max(0, Math.min(1, value))
+  return { x: clamp(x), y: clamp(y) }
+}
+
 /**
  * `facility-status` 응답 정규화. **배열이 아니면 `null`**(호출부가 실패로 처리한다).
  *
@@ -425,7 +433,7 @@ export function parseFacilityStatuses(raw: unknown): FacilityStatus[] | null {
   if (!Array.isArray(raw)) return null
   return raw.flatMap((item: unknown): FacilityStatus[] => {
     if (typeof item !== 'object' || item === null) return []
-    const { assetId, severity, stale, collectedAt, metrics } = item as Record<string, unknown>
+    const { assetId, severity, stale, collectedAt, metrics, name, assetCode, category, monitoringType, pin } = item as Record<string, unknown>
     if (!Number.isInteger(assetId) || (assetId as number) <= 0) return []
     return [{
       assetId: assetId as number,
@@ -433,8 +441,50 @@ export function parseFacilityStatuses(raw: unknown): FacilityStatus[] | null {
       stale: stale === true,
       collectedAt: typeof collectedAt === 'string' && Number.isFinite(Date.parse(collectedAt)) ? collectedAt : null,
       metrics: Array.isArray(metrics) ? metrics.flatMap((metric: unknown) => toFacilityMetric(metric) ?? []) : [],
+      name: nullableText(name),
+      assetCode: nullableText(assetCode),
+      category: nullableText(category),
+      monitoringType: nullableText(monitoringType),
+      pin: toFacilityPin(pin),
     }]
   })
+}
+
+/** 배경 핀 좌표를 옮겨 놓은 자리. 측정값이 아니라 **대략 위치**다. */
+export type ApproximatePin = {
+  assetId: number
+  /** 씬 좌표(m). 칸 중심이 `index * tileSize` 이므로 바닥 범위는 −½칸에서 시작한다. */
+  worldX: number
+  worldZ: number
+}
+
+/**
+ * 3D 오브젝트가 없는 핀 자산의 대략 자리.
+ *
+ * **판단 기준은 `layoutLinked` 가 아니라 지금 그려진 씬이다.** 배치는 진입 시 1회만 받고 상태는 30초마다
+ * 받으므로 둘이 어긋날 수 있다. 플래그를 따르면 편집기에서 막 연결한 핀이 오브젝트 없이 사라지거나
+ * 오브젝트와 핀에 두 번 그려진다. 씬 기준이면 한 자산은 항상 한 자리에만 나온다.
+ *
+ * 칸으로 내리지 않고 연속 좌표로 옮긴다 — 한 칸에 핀이 몰려도 포개지지 않고, 칸에 맞춰 놓으면
+ * 대략 위치가 배치도처럼 정확해 보인다.
+ */
+export function collectApproximatePins(
+  objects: SceneObject[],
+  statuses: Iterable<FacilityStatus>,
+  grid: SceneGrid | null,
+): ApproximatePin[] {
+  if (!grid) return []
+  const drawn = new Set(objects.flatMap((object) => (object.asset ? [object.asset.assetId] : [])))
+  const pins: ApproximatePin[] = []
+  for (const status of statuses) {
+    if (!status.pin || drawn.has(status.assetId)) continue
+    pins.push({
+      assetId: status.assetId,
+      worldX: (status.pin.x * grid.cols - 0.5) * grid.tileSize,
+      worldZ: (status.pin.y * grid.rows - 0.5) * grid.tileSize,
+    })
+  }
+  return pins
 }
 
 /** 표시명 — `label` → 연결 자산 이름 → `type`. 전부 FMS 원값이다. */

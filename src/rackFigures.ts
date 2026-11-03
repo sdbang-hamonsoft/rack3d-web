@@ -12,7 +12,7 @@
 
 import * as THREE from 'three'
 import type { RackData, SceneObject, ServerData } from './rackLayouts'
-import type { FacilityStatus, LayoutObjectAsset, RackSeverity, RackSummary } from './api/types'
+import type { FacilityMetric, FacilityStatus, LayoutObjectAsset, RackSeverity, RackSummary } from './api/types'
 
 /** 값이 없을 때 화면에 쓰는 표기. **null을 0으로 바꾸지 않는다**(C6). */
 export const NO_VALUE = '—'
@@ -371,14 +371,129 @@ export function facilityMetricsNote(monitoringType: string | null, status: Facil
     : '이 설비는 측정값을 제공하지 않습니다.'
 }
 
+// ── 시설 핀 카드 — FMS `facilityPins.ts` 와 같은 아이콘·문구 (netis-fms E76) ─────────────
+
+type FacilityMeta = { category: string | null; monitoringType: string | null }
+
+/** FMS `pinIcon` 과 같은 표. 입력이 서버 값이어도 고정 표라 임의 문자열이 아이콘 자리에 오지 않는다. */
+export function facilityPinIcon({ category, monitoringType }: FacilityMeta): string {
+  switch (monitoringType) {
+    case 'TH': return '🌡️'
+    case 'HVAC': return '❄️'
+    case 'UPS': return '🔋'
+    case 'DPM': return '⚡'
+    case 'LEAK': return '💧'
+    case 'FIRE': return '🔥'
+    case 'ACCESS': return '🚪'
+    default: break
+  }
+  switch (category) {
+    case 'CCTV': return '📹'
+    case 'NETWORK':
+    case 'SERVER': return '🗄'
+    case 'POWER': return '⚡'
+    case 'HVAC': return '❄️'
+    case 'SECURITY': return '🔒'
+    default: return '📍'
+  }
+}
+
+/** FMS 카드와 같은 문구. 값이 없는 줄은 뺀다. 출입 인원·영상 상태는 이 API 가 주지 않아 줄이 없다. */
+function facilityMetricLines(monitoringType: string | null, metrics: FacilityMetric[]): string[] {
+  const values = new Map(metrics.map((metric) => [metric.key, metric.value]))
+  const num = (key: string) => {
+    const value = values.get(key)
+    return typeof value === 'number' ? value : null
+  }
+  const part = (label: string, value: number | null, digits: number, unit: string) => (value === null ? null : `${label}: ${value.toFixed(digits)} ${unit}`)
+  const joined = (...parts: (string | null)[]) => {
+    const present = parts.filter((item): item is string => item !== null)
+    return present.length > 0 ? [present.join(' | ')] : []
+  }
+  const detected = (key: string, what: string) => {
+    const value = values.get(key)
+    return typeof value === 'boolean' ? [value ? `상태: ${what} 감지` : '상태: 정상'] : []
+  }
+  switch (monitoringType) {
+    case 'TH':
+      return joined(part('온도', num('temp'), 1, '°C'), part('습도', num('humidity'), 1, '%'))
+    case 'HVAC': {
+      const lines: string[] = []
+      const state = values.get('operating_state')
+      if (typeof state === 'string' && state) lines.push(`상태: ${state}`)
+      const temp = num('temp')
+      const humidity = num('humidity')
+      const climate = [temp === null ? null : `${temp.toFixed(1)} °C`, humidity === null ? null : `${humidity.toFixed(1)} %`].filter((item) => item !== null)
+      if (climate.length > 0) lines.push(climate.join(' / '))
+      const alarms = metrics.filter((metric) => metric.key.startsWith('alm_') && metric.value === true).length
+      if (alarms > 0) lines.push(`접점 경보 ${alarms}건`)
+      return lines
+    }
+    case 'UPS': {
+      const backup = num('battery_backup_min')
+      return [
+        ...joined(part('배터리', num('battery_soc'), 0, '%'), part('출력', num('active_power'), 1, 'kW')),
+        ...(backup === null ? [] : [`백업 가능: ${backup.toFixed(0)} 분`]),
+      ]
+    }
+    case 'DPM':
+      return joined(part('전력', num('active_power'), 1, 'kW'), part('전압', num('volt_r'), 0, 'V'))
+    case 'LEAK':
+      return detected('leak_detected', '누수')
+    case 'FIRE': {
+      const smoke = num('smoke_density')
+      return [...detected('fire_detected', '화재'), ...(smoke === null ? [] : [`연기 농도: ${smoke.toFixed(1)} %`])]
+    }
+    default:
+      return []
+  }
+}
+
+export type FacilityPinTone = 'danger' | 'warning' | 'normal' | 'stale' | 'muted'
+
+export type FacilityPinCard = {
+  icon: string
+  tone: FacilityPinTone
+  /** `⚠️ [경보] ` 처럼 제목 앞에 붙는 글자. 평상시에는 빈 문자열이다. */
+  prefix: string
+  lines: string[]
+}
+
+/** 카드 제목. 자산 id 는 화면에 내지 않는다. */
+export function facilityPinTitle(name: string | null | undefined, assetCode: string | null | undefined): string {
+  return name ?? assetCode ?? '이름 없는 설비'
+}
+
+/**
+ * 핀 카드. 등급 색은 FMS 카드와 같다(CRITICAL·MAJOR 빨강, CAUTION 노랑).
+ *
+ * **FMS 카드와 다른 점이 하나 있다.** FMS 는 판정을 모르면 평상시와 같은 시안으로 그리는데, 여기서는
+ * 상태 없음·미수집·미갱신을 흐리게 하고 글로 밝힌다 — {@link facilityStatusView} 의 규칙이다.
+ */
+export function facilityPinCard(meta: FacilityMeta, status: FacilityStatus | undefined, view: FacilityStatusView): FacilityPinCard {
+  const severity = status?.severity
+  let tone: FacilityPinTone = 'normal'
+  if (view.alarm) tone = severity === 'CRITICAL' || severity === 'MAJOR' ? 'danger' : 'warning'
+  else if (view.tone === 'stale') tone = 'stale'
+  else if (view.tone === 'unknown') tone = 'muted'
+
+  const lines = facilityMetricLines(meta.monitoringType, status?.metrics ?? [])
+  if (view.label.endsWith('미갱신')) lines.push('상태 미갱신')
+  else if (status?.stale) lines.push('통신: 이상')
+  else if (view.tone === 'unknown') lines.push(view.label)
+
+  const prefix = tone === 'danger' ? '⚠️ [경보] ' : tone === 'warning' ? '⚠️ [주의] ' : ''
+  return { icon: facilityPinIcon(meta), tone, prefix, lines }
+}
+
 export type FacilityAlarm = {
   key: string
   label: string
-  /** 이 항목이 묶고 있는 경보 수. 3D 에 연결되지 않은 자산은 한 줄로 묶는다. */
+  /** 이 항목이 묶고 있는 경보 수. 3D 에 자리가 없고 이름도 모르는 자산은 한 줄로 묶는다. */
   count: number
   view: FacilityStatusView
-  /** 3D 에 있으면 그 오브젝트. `null` 이면 그릴 곳이 없어 눌러도 갈 곳이 없다. */
-  object: SceneObject | null
+  /** 3D 에 있으면 그 자산. `null` 이면 그릴 곳이 없어 눌러도 갈 곳이 없다. */
+  assetId: number | null
 }
 
 /** 등급 순서. 톤으로 정렬하면 MAJOR 와 CAUTION 이 같아 MAJOR 가 뒤로 밀린다. 모르는 등급은 MAJOR 와 같이 둔다. */
@@ -388,24 +503,28 @@ const facilityAlarmRank = (severity: RackSeverity | null | undefined): number =>
 }
 
 /**
- * 경보 목록. **3D 에 그려진 것만 세지 않는다.** 응답에는 3D 에 없는 자산(배경 핀만 있는 것·그리드 밖
- * 좌표)도 있는데, 그 경보를 버리면 심각 경보가 씬·상단바 어디에도 없이 사라진다(배치되지 않은 랙을
- * 조용히 빼지 않는 것과 같은 규칙이다). 이름을 모르는 자산은 id 를 화면에 내지 않고 한 줄로 묶는다.
+ * 경보 목록. **3D 에 그려진 것만 세지 않는다.** 그리드 밖 좌표이거나 레이아웃이 없는 ZONE 의 자산처럼
+ * 자리가 없는 경보를 버리면 심각 경보가 씬·상단바 어디에도 없이 사라진다(배치되지 않은 랙을 조용히
+ * 빼지 않는 것과 같은 규칙이다). 이름을 모르는 자산은 id 를 화면에 내지 않고 한 줄로 묶는다.
+ *
+ * @param pinnedAssetIds 대략 위치로 씬에 그려진 핀 자산.
  */
 export function collectFacilityAlarms(
   objects: SceneObject[],
   unplacedAssets: LayoutObjectAsset[],
   statuses: Map<number, FacilityStatus>,
+  pinnedAssetIds: Set<number>,
   feedFailed: boolean,
 ): FacilityAlarm[] {
   const alarms: { alarm: FacilityAlarm; rank: number }[] = []
   const shown = new Set<number>()
   objects.forEach((object) => {
     if (!object.asset) return
-    shown.add(object.asset.assetId)
-    const status = statuses.get(object.asset.assetId)
+    const assetId = object.asset.assetId
+    shown.add(assetId)
+    const status = statuses.get(assetId)
     const view = facilityStatusView(status, feedFailed)
-    if (view.alarm) alarms.push({ alarm: { key: object.id, label: object.label, count: 1, view, object }, rank: facilityAlarmRank(status?.severity) })
+    if (view.alarm) alarms.push({ alarm: { key: object.id, label: facilityPinTitle(object.asset.name ?? object.label, null), count: 1, view, assetId }, rank: facilityAlarmRank(status?.severity) })
   })
   const unplacedNames = new Map(unplacedAssets.map((asset) => [asset.assetId, asset.name]))
   const unnamed: { view: FacilityStatusView; rank: number }[] = []
@@ -414,13 +533,18 @@ export function collectFacilityAlarms(
     const view = facilityStatusView(status, feedFailed)
     if (!view.alarm) return
     const rank = facilityAlarmRank(status.severity)
-    const name = unplacedNames.get(assetId)
-    if (name) alarms.push({ alarm: { key: `asset-${assetId}`, label: `${name} (3D 미배치)`, count: 1, view, object: null }, rank })
-    else unnamed.push({ view, rank })
+    const name = status.name ?? unplacedNames.get(assetId) ?? status.assetCode
+    if (pinnedAssetIds.has(assetId)) {
+      alarms.push({ alarm: { key: `asset-${assetId}`, label: facilityPinTitle(name, null), count: 1, view, assetId }, rank })
+    } else if (name) {
+      alarms.push({ alarm: { key: `asset-${assetId}`, label: `${name} (3D 미배치)`, count: 1, view, assetId: null }, rank })
+    } else {
+      unnamed.push({ view, rank })
+    }
   })
   if (unnamed.length > 0) {
     const worst = unnamed.reduce((a, b) => (b.rank < a.rank ? b : a))
-    alarms.push({ alarm: { key: 'unlinked-assets', label: `3D 미연결 설비 ${unnamed.length}건`, count: unnamed.length, view: worst.view, object: null }, rank: worst.rank })
+    alarms.push({ alarm: { key: 'unlinked-assets', label: `3D 미연결 설비 ${unnamed.length}건`, count: unnamed.length, view: worst.view, assetId: null }, rank: worst.rank })
   }
   return alarms.sort((a, b) => a.rank - b.rank).map(({ alarm }) => alarm)
 }

@@ -279,6 +279,13 @@ export type FacilityStatus = {
   stale: boolean
   collectedAt: string | null
   metrics: FacilityMetric[]
+  /** 핀 카드의 아이콘·제목용. E76 1차 FMS 는 주지 않는다 — 없으면 전부 `null`. */
+  name: string | null
+  assetCode: string | null
+  category: string | null
+  monitoringType: string | null
+  /** 시설종합현황 배경 그림 기준 0~1 비율. 평면도 좌표가 아니므로 3D 에는 "대략 위치"로만 쓴다. */
+  pin: { x: number; y: number } | null
 }
 
 /**

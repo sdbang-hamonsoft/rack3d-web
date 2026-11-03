@@ -1,8 +1,8 @@
 // Run with Node 24+: node --experimental-strip-types --test scripts/dev/facility-status.test.mjs
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildZoneScene, objectLabel, parseFacilityStatuses, toObjectAsset } from '../../src/rackLayouts.ts'
-import { collectFacilityAlarms, facilityMetricsNote, facilityStatusView } from '../../src/rackFigures.ts'
+import { buildZoneScene, collectApproximatePins, objectLabel, parseFacilityStatuses, toObjectAsset } from '../../src/rackLayouts.ts'
+import { collectFacilityAlarms, facilityMetricsNote, facilityPinCard, facilityPinIcon, facilityPinTitle, facilityStatusView } from '../../src/rackFigures.ts'
 
 const asset = { assetId: 9, assetCode: 'TH-01', name: '온습도 #1', category: 'SENSOR', monitoringType: 'TH' }
 const object = (o) => ({ id: 1, type: 'SENSOR', x: 1, z: 1, dir: 'NORTH', label: '', rack: null, asset: null, ...o })
@@ -72,7 +72,7 @@ test('a response of the wrong shape is a failure, and broken items are dropped',
   assert.deepEqual(parseFacilityStatuses([null, 7, { assetId: 'x' }, { assetId: 0 }]), [])
   assert.deepEqual(
     parseFacilityStatuses([{ assetId: 9, severity: { a: 1 }, stale: 'yes', collectedAt: 'garbage', metrics: [null, { key: 'k', value: { b: 2 }, unit: 3 }, { value: 1 }] }]),
-    [{ assetId: 9, severity: null, stale: false, collectedAt: null, metrics: [{ key: 'k', name: null, value: null, unit: null }] }],
+    [{ assetId: 9, severity: null, stale: false, collectedAt: null, metrics: [{ key: 'k', name: null, value: null, unit: null }], name: null, assetCode: null, category: null, monitoringType: null, pin: null }],
   )
   assert.equal(parseFacilityStatuses([{ assetId: 9, severity: 'constructor' }])[0].severity, null)
   assert.equal(parseFacilityStatuses([{ assetId: 9, severity: 'NEW_LEVEL' }])[0].severity, 'NEW_LEVEL')
@@ -99,9 +99,9 @@ test('an alarm with nowhere to draw is still reported', () => {
     [4, status({ assetId: 4, severity: 'CRITICAL' })],
     [6, status({ assetId: 6 })],
   ])
-  const alarms = collectFacilityAlarms(scene.objects, scene.unplacedFacilityAssets, statuses, false)
-  // 이름을 아는 것은 이름으로, 모르는 핀 자산은 id 없이 묶고 그 중 가장 심각한 등급을 보인다.
-  assert.deepEqual(alarms.map((a) => [a.label, a.count, a.view.label, a.object]), [
+  const alarms = collectFacilityAlarms(scene.objects, scene.unplacedFacilityAssets, statuses, new Set(), false)
+  // 이름을 아는 것은 이름으로, 모르는 자산은 id 없이 묶고 그 중 가장 심각한 등급을 보인다.
+  assert.deepEqual(alarms.map((a) => [a.label, a.count, a.view.label, a.assetId]), [
     ['3D 미연결 설비 2건', 2, '심각', null],
     ['온습도 #1 (3D 미배치)', 1, '주의', null],
   ])
@@ -112,5 +112,84 @@ test('alarms sort by severity, not tone', () => {
   const objects = [1, 2, 3, 4, 5, 6].map((n) => sceneObject(`o${n}`, n))
   const severities = { 1: 'CAUTION', 2: 'CAUTION', 3: 'NORMAL', 4: 'MAJOR', 5: 'CAUTION', 6: 'CRITICAL' }
   const statuses = new Map(Object.entries(severities).map(([id, severity]) => [Number(id), status({ assetId: Number(id), severity })]))
-  assert.deepEqual(collectFacilityAlarms(objects, [], statuses, false).map((a) => a.key), ['o6', 'o4', 'o1', 'o2', 'o5'])
+  assert.deepEqual(collectFacilityAlarms(objects, [], statuses, new Set(), false).map((a) => a.key), ['o6', 'o4', 'o1', 'o2', 'o5'])
+})
+
+const grid = { cols: 10, rows: 5, tileSize: 0.6 }
+const linked = (assetId) => ({ id: `o${assetId}`, type: 'SENSOR', label: 'x', color: '#000', heightM: 1, placement: null, asset: { assetId } })
+
+test('pin fields parse safely', () => {
+  const [full] = parseFacilityStatuses([{ assetId: 9, name: '센서', assetCode: 'C', category: 'SENSOR', monitoringType: 'TH', pin: { x: 0.25, y: 1.5 } }])
+  assert.deepEqual(full.pin, { x: 0.25, y: 1 })
+  assert.equal(full.name, '센서')
+  for (const pin of [null, undefined, 'x', { x: 'a', y: 1 }, { x: 1 }, { x: NaN, y: 1 }]) {
+    assert.equal(parseFacilityStatuses([{ assetId: 9, pin }])[0].pin, null)
+  }
+})
+
+test('an asset is drawn in one place only, decided by the scene', () => {
+  const statuses = [
+    status({ assetId: 1, pin: { x: 0, y: 0 } }),
+    status({ assetId: 2, pin: { x: 1, y: 1 } }),
+    status({ assetId: 3, pin: null }),
+    // layoutLinked 플래그가 어긋나도(배치는 진입 시 1회) 씬에 있으면 다시 그리지 않는다.
+    status({ assetId: 4, pin: { x: 0.5, y: 0.5 }, layoutLinked: false }),
+    status({ assetId: 5, pin: { x: 0.5, y: 0.5 }, layoutLinked: true }),
+  ]
+  const pins = collectApproximatePins([linked(4)], statuses, grid)
+  assert.deepEqual(pins.map((pin) => pin.assetId), [1, 2, 5])
+  // 그림 왼쪽 위·오른쪽 아래가 바닥의 두 모서리(칸 중심이 index*tile 이라 −½칸에서 시작한다).
+  assert.deepEqual([pins[0].worldX, pins[0].worldZ].map((v) => +v.toFixed(3)), [-0.3, -0.3])
+  assert.deepEqual([pins[1].worldX, pins[1].worldZ].map((v) => +v.toFixed(3)), [5.7, 2.7])
+  assert.deepEqual(collectApproximatePins([], statuses, null), [])
+})
+
+test('alarm strip and card use the same name', () => {
+  const statuses = new Map([[9, status({ severity: 'MAJOR' })]])
+  const object = { id: 'o', type: 'SENSOR', label: 'TH-라벨', color: '#000', heightM: 1, placement: null, asset: { assetId: 9, name: '온습도 #1' } }
+  assert.equal(collectFacilityAlarms([object], [], statuses, new Set(), false)[0].label, '온습도 #1')
+})
+
+test('alarm on a drawn pin can be opened; without a grid it is still reported', () => {
+  const statuses = new Map([[7, status({ assetId: 7, severity: 'MAJOR', name: '센서7', pin: { x: 0, y: 0 } })]])
+  assert.deepEqual(collectFacilityAlarms([], [], statuses, new Set([7]), false).map((a) => [a.label, a.assetId]), [['센서7', 7]])
+  assert.deepEqual(collectFacilityAlarms([], [], statuses, new Set(), false).map((a) => [a.label, a.assetId]), [['센서7 (3D 미배치)', null]])
+})
+
+test('pin card matches the FMS card wording and tones', () => {
+  const card = (meta, s, feedFailed = false) => facilityPinCard(meta, s, facilityStatusView(s, feedFailed))
+  const th = { category: 'SENSOR', monitoringType: 'TH' }
+  const metric = (key, value) => ({ key, name: null, value, unit: null })
+  assert.deepEqual(card(th, status({ metrics: [metric('temp', 23.46), metric('humidity', null)] })), { icon: '🌡️', tone: 'normal', prefix: '', lines: ['온도: 23.5 °C'] })
+  assert.equal(card(th, status({ severity: 'MAJOR' })).tone, 'danger')
+  assert.equal(card(th, status({ severity: 'CRITICAL' })).prefix, '⚠️ [경보] ')
+  assert.equal(card(th, status({ severity: 'CAUTION' })).prefix, '⚠️ [주의] ')
+  assert.deepEqual(card({ category: 'HVAC', monitoringType: 'HVAC' }, status({ metrics: [metric('operating_state', '송풍, 냉방'), metric('temp', 22), metric('humidity', 45), metric('alm_a', true), metric('alm_b', false)] })).lines, ['상태: 송풍, 냉방', '22.0 °C / 45.0 %', '접점 경보 1건'])
+  assert.deepEqual(card({ category: 'POWER', monitoringType: 'UPS' }, status({ metrics: [metric('battery_soc', 100), metric('active_power', 12.34), metric('battery_backup_min', 30)] })).lines, ['배터리: 100 % | 출력: 12.3 kW', '백업 가능: 30 분'])
+  assert.deepEqual(card({ category: 'SENSOR', monitoringType: 'LEAK' }, status({ metrics: [metric('leak_detected', true)] })).lines, ['상태: 누수 감지'])
+  assert.deepEqual(card({ category: 'SENSOR', monitoringType: 'FIRE' }, status({ metrics: [metric('fire_detected', false), metric('smoke_density', 1.26)] })).lines, ['상태: 정상', '연기 농도: 1.3 %'])
+  assert.deepEqual(card({ category: 'POWER', monitoringType: 'DPM' }, status({ metrics: [metric('active_power', 142.8), metric('volt_r', 220)] })).lines, ['전력: 142.8 kW | 전압: 220 V'])
+})
+
+test('pin card never passes unknown state off as normal', () => {
+  const card = (s, feedFailed = false) => facilityPinCard({ category: 'CCTV', monitoringType: null }, s, facilityStatusView(s, feedFailed))
+  assert.deepEqual(card(undefined), { icon: '📹', tone: 'muted', prefix: '', lines: ['상태 없음'] })
+  assert.deepEqual(card(status({ collectedAt: null })).lines, ['미수집'])
+  assert.equal(card(status({ collectedAt: null })).tone, 'muted')
+  assert.deepEqual(card(status({ stale: true })), { icon: '📹', tone: 'stale', prefix: '', lines: ['통신: 이상'] })
+  assert.deepEqual(card(status({}), true), { icon: '📹', tone: 'muted', prefix: '', lines: ['상태 미갱신'] })
+  assert.deepEqual(card(status({ severity: 'CRITICAL', stale: true }), true).lines, ['상태 미갱신'])
+  assert.equal(card(status({ severity: 'CRITICAL', stale: true })).tone, 'danger')
+  assert.deepEqual(card(status({ severity: 'CRITICAL', stale: true })).lines, ['통신: 이상'])
+})
+
+test('icons and titles follow the FMS table without exposing ids', () => {
+  for (const [monitoringType, icon] of [['TH', '🌡️'], ['HVAC', '❄️'], ['UPS', '🔋'], ['DPM', '⚡'], ['LEAK', '💧'], ['FIRE', '🔥'], ['ACCESS', '🚪']]) {
+    assert.equal(facilityPinIcon({ category: 'SENSOR', monitoringType }), icon)
+  }
+  assert.equal(facilityPinIcon({ category: 'CCTV', monitoringType: 'NVR' }), '📹')
+  assert.equal(facilityPinIcon({ category: 'X', monitoringType: null }), '📍')
+  assert.equal(facilityPinTitle('이름', 'C'), '이름')
+  assert.equal(facilityPinTitle(null, 'C'), 'C')
+  assert.equal(facilityPinTitle(null, null), '이름 없는 설비')
 })

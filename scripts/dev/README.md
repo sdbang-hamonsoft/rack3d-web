@@ -38,7 +38,7 @@ VITE_FMS_ORIGIN=http://localhost:8777 npm run dev              # rack3d를 스�
 | `facility-no-metrics` | 지표 권한 없는 계정 — 수집 유형은 "권한이 없습니다", 출입·CCTV 는 "제공하지 않습니다" 안내가 갈리는지 확인 |
 | `facility-wrapped` | 설비 상태가 200 인데 배열이 아님 — `상태 없음 · LIVE` 가 아니라 실패로 보이는지 확인 |
 | `facility-malformed` | 깨진 항목이 섞인 응답 — 앱이 내려가지 않고 멀쩡한 항목은 표시되는지 확인 |
-| `facility-orphan` | 3D 에 없는 자산의 심각 경보 + 경고·주의 혼합 — `설비 경보` 맨 앞에 `3D 미연결 설비 N건` 으로 묶여 뜨고(자산 id 노출 없음) `외 N건` 이 펼쳐지는지 확인 |
+| `facility-orphan` | 이름·핀이 없는 자산의 심각 경보(E76 1차 FMS 응답 형태) + 경고·주의 혼합 — `설비 경보` 맨 앞에 `3D 미연결 설비 N건` 으로 묶여 뜨고(자산 id 노출 없음) `외 N건` 이 펼쳐지는지 확인 |
 
 | `photo-meta-fail` | `GET /assets/{id}/images` 500 — 메타 실패가 사진 없는 상태로 수렴하는지(씬은 살아 있어야 한다) |
 | `photo-fail` | 사진 바이트 500 — 실패 쿨다운이 걸리는지, 같은 면을 무한 재요청하지 않는지 |

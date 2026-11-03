@@ -12,10 +12,11 @@ import {
   RACK_UNIT_HEIGHT_M,
   SERVER_MODEL_UNITS,
   buildZoneScene,
+  collectApproximatePins,
   rackElementId,
   reuseUnchangedRacks,
 } from './rackLayouts'
-import type { RackCacheEntry, SceneGrid, SceneObject, ScenePlacement } from './rackLayouts'
+import type { ApproximatePin, RackCacheEntry, SceneGrid, SceneObject, ScenePlacement } from './rackLayouts'
 import type { RackData, ServerData, ServerModel } from './rackLayouts'
 import { collectZones, fetchSidebar, fetchZoneFacilityStatus, fetchZoneLayout, fetchZoneRacks, fetchZoneUMaps, type ZoneSummary } from './api/fms'
 import type { AssetImageView, FacilityMetric, FacilityStatus, LayoutObjectAsset, MeResponse, RackSummary, RackSeverity, RackUMap, ZoneLayout } from './api/types'
@@ -45,6 +46,8 @@ import {
   rackAvailableUnits,
   rackOccupancyPercent,
   collectFacilityAlarms,
+  facilityPinCard,
+  facilityPinTitle,
   facilityMetricsNote,
   facilityStatusView,
   severityLabel,
@@ -52,7 +55,7 @@ import {
   severityTones,
   unmountedAssetCount,
 } from './rackFigures'
-import type { FacilityStatusView, HeatmapDataset, HeatmapMode, RackHeatmapVisual, SeverityTone, ZoneAggregate } from './rackFigures'
+import type { FacilityPinCard, FacilityPinTone, FacilityStatusView, HeatmapDataset, HeatmapMode, RackHeatmapVisual, SeverityTone, ZoneAggregate } from './rackFigures'
 import { useBranding, useProductName } from './hooks/useBranding'
 import './App.css'
 
@@ -757,6 +760,105 @@ function LayoutObjectModel({
   )
 }
 
+/** 접힌 상태에서 보여줄 설비 경보 수. 등급순이라 가장 심각한 것이 먼저 나온다. */
+const FACILITY_ALARMS_COLLAPSED = 4
+/** 이 거리(px) 넘게 움직였으면 클릭이 아니라 시점 조작이다. */
+const CLICK_DRAG_TOLERANCE_PX = 4
+
+/** 대략 위치 표시의 바닥 고리·기둥 색. 카드 테두리(App.css `.facility-pin`)와 같은 값이다. */
+const FACILITY_PIN_TONE_COLORS: Record<FacilityPinTone, string> = {
+  danger: '#eb0058',
+  warning: '#ffb724',
+  normal: '#5089ef',
+  stale: '#c49bff',
+  muted: '#7d90a1',
+}
+
+/**
+ * 시설 핀 카드 — FMS 시설종합현황 핀(`.sensor-pin`)과 같은 모양. 화면 크기가 고정이라 `distanceFactor`를
+ * 쓰지 않는다(멀어져도 읽혀야 한다). **아이콘만 클릭을 받는다** — 카드가 시점 드래그를 막지 않게 한다.
+ */
+function FacilityPinCardView({
+  card,
+  title,
+  approximate,
+  selected,
+  detailsVisible,
+  onSelect,
+}: {
+  card: FacilityPinCard
+  title: string
+  approximate: boolean
+  selected: boolean
+  detailsVisible: boolean
+  onSelect: () => void
+}) {
+  return (
+    <div className={`facility-pin ${card.tone}${selected ? ' selected' : ''}`}>
+      <button
+        type="button"
+        className="facility-pin-icon"
+        title={title}
+        aria-label={`${title}, 상세 보기`}
+        onClick={(event) => { event.stopPropagation(); onSelect() }}
+      >
+        {card.icon}
+      </button>
+      {(detailsVisible || selected) && (
+        <div className="facility-pin-details">
+          <strong>{card.prefix}{title}</strong>
+          {card.lines.map((line, index) => <div key={index}>{line}</div>)}
+          {approximate && <em>대략 위치</em>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * 3D 오브젝트가 없는 핀 자산. 좌표가 평면도 기준이 아니므로 **대략 위치**임을 카드에 밝힌다.
+ * 고리·기둥은 클릭을 받지 않는다(받으면 `onPointerMissed`가 막혀 빈 곳 클릭이 안 먹는 자리가 생긴다).
+ */
+function ApproximatePinMarker({
+  pin,
+  card,
+  title,
+  selected,
+  detailsVisible,
+  onSelect,
+}: {
+  pin: ApproximatePin
+  card: FacilityPinCard
+  title: string
+  selected: boolean
+  detailsVisible: boolean
+  onSelect: (assetId: number) => void
+}) {
+  const color = FACILITY_PIN_TONE_COLORS[card.tone]
+  return (
+    <group position={[pin.worldX, 0, pin.worldZ]}>
+      <mesh position={[0, 0.05, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => undefined}>
+        <ringGeometry args={[0.13, 0.18, 32]} />
+        <meshBasicMaterial color={color} transparent opacity={0.85} toneMapped={false} />
+      </mesh>
+      <mesh position={[0, 0.5, 0]} raycast={() => undefined}>
+        <cylinderGeometry args={[0.006, 0.006, 0.9, 6]} />
+        <meshBasicMaterial color={color} transparent opacity={0.6} toneMapped={false} />
+      </mesh>
+      <Html position={[0, 1.0, 0]} center zIndexRange={card.tone === 'danger' ? [2, 1] : [1, 0]} style={{ pointerEvents: 'none' }}>
+        <FacilityPinCardView
+          card={card}
+          title={title}
+          approximate
+          selected={selected}
+          detailsVisible={detailsVisible}
+          onSelect={() => onSelect(pin.assetId)}
+        />
+      </Html>
+    </group>
+  )
+}
+
 /**
  * 배치 오브젝트 1건.
  *
@@ -771,27 +873,25 @@ function LayoutObjectModel({
  *
  * **자산이 연결된 오브젝트(E76)에만** 클릭 핸들러를 단다. 나머지는 붙일 상세 데이터가 없고,
  * 핸들러가 있으면 r3f가 `onPointerMissed`(전체 보기 복귀)를 막는다 — 그래서 `onClick={undefined}`가
- * 아니라 **prop 자체를 뺀다**(`status` 가 `null` 이면 연결 없음).
+ * 아니라 **prop 자체를 뺀다**(`card` 가 `null` 이면 연결 없음).
  */
-/** 접힌 상태에서 보여줄 설비 경보 수. 등급순이라 가장 심각한 것이 먼저 나온다. */
-const FACILITY_ALARMS_COLLAPSED = 4
-/** 이 거리(px) 넘게 움직였으면 클릭이 아니라 시점 조작이다. */
-const CLICK_DRAG_TOLERANCE_PX = 4
-
 function LayoutObjectMesh({
   object,
   tileSize,
-  status,
+  card,
   selected,
+  detailsVisible,
   onSelect,
 }: {
   object: SceneObject
   tileSize: number
-  status: FacilityStatusView | null
+  card: FacilityPinCard | null
   selected: boolean
-  onSelect: (object: SceneObject) => void
+  detailsVisible: boolean
+  onSelect: (assetId: number) => void
 }) {
   const { placement, heightM } = object
+  const assetId = card ? object.asset?.assetId ?? null : null
   // 1타일보다 조금 작게 — 옆 칸과 붙어 한 덩어리로 보이지 않게 칸 경계를 남긴다.
   const footprint = Math.max(0.12, tileSize * 0.84)
   const model = LAYOUT_OBJECT_MODELS[object.type]
@@ -803,11 +903,11 @@ function LayoutObjectMesh({
     <group
       position={[placement.tileX * tileSize, 0, placement.tileZ * tileSize]}
       rotation={[0, placement.rotation, 0]}
-      {...(status ? {
+      {...(assetId !== null ? {
         onClick: (event: ThreeEvent<MouseEvent>) => {
           event.stopPropagation()
           // r3f 는 같은 오브젝트에서 눌렀다 떼면 드래그여도 클릭으로 준다. 시점 회전이 선택이 되면 안 된다.
-          if (event.delta <= CLICK_DRAG_TOLERANCE_PX) onSelect(object)
+          if (event.delta <= CLICK_DRAG_TOLERANCE_PX) onSelect(assetId)
         },
       } : {})}
     >
@@ -836,27 +936,30 @@ function LayoutObjectMesh({
         **이름표 칩(테두리·점)이 팔레트 색의 최종 보증이다** — 모델을 쓰는 오브젝트는 받침대가
         모델에 가려질 수 있어서, 2D 에디터와의 색 대응이 여기에 남는다.
       */}
-      <Html position={[0, LAYOUT_OBJECT_BASE_Y + Math.max(heightM + elevation + 0.14, 0.62), 0]} center distanceFactor={8} zIndexRange={[1, 0]}>
-        {status ? (
-          /* 바닥형 누수감지처럼 형상이 작아 클릭하기 어려운 것이 있어 이름표도 누를 수 있어야 한다. */
-          <button
-            type="button"
-            className={`layout-object-label linked ${status.tone}${selected ? ' selected' : ''}`}
-            style={{ borderColor: object.color }}
-            aria-label={`${object.label}, ${status.label}, 상세 보기`}
-            onClick={(event) => { event.stopPropagation(); onSelect(object) }}
-          >
-            <i style={{ background: object.color }} />
-            {object.label}
-            <b>{status.label}</b>
-          </button>
-        ) : (
+      {card && assetId !== null ? (
+        <Html
+          position={[0, LAYOUT_OBJECT_BASE_Y + Math.max(heightM + elevation + 0.14, 0.62), 0]}
+          center
+          zIndexRange={card.tone === 'danger' ? [2, 1] : [1, 0]}
+          style={{ pointerEvents: 'none' }}
+        >
+          <FacilityPinCardView
+            card={card}
+            title={facilityPinTitle(object.asset?.name ?? object.label, null)}
+            approximate={false}
+            selected={selected}
+            detailsVisible={detailsVisible}
+            onSelect={() => onSelect(assetId)}
+          />
+        </Html>
+      ) : (
+        <Html position={[0, LAYOUT_OBJECT_BASE_Y + Math.max(heightM + elevation + 0.14, 0.62), 0]} center distanceFactor={8} zIndexRange={[1, 0]}>
           <div className="layout-object-label" style={{ borderColor: object.color }}>
             <i style={{ background: object.color }} />
             {object.label}
           </div>
-        )}
-      </Html>
+        </Html>
+      )}
     </group>
   )
 }
@@ -1326,7 +1429,9 @@ function DataCenterScene({
   focusedRack,
   selectedServer,
   selectedFacilityAssetId,
-  facilityStatusFor,
+  facilityCardFor,
+  approximatePins,
+  pinDetailsVisible,
   heatmapVisuals,
   rackSeverities,
   theme,
@@ -1338,8 +1443,10 @@ function DataCenterScene({
   racks: RackData[]
   objects: SceneObject[]
   selectedFacilityAssetId: number | null
-  facilityStatusFor: (object: SceneObject) => FacilityStatusView | null
-  onSelectFacility: (object: SceneObject) => void
+  facilityCardFor: (object: SceneObject) => FacilityPinCard | null
+  approximatePins: { pin: ApproximatePin; card: FacilityPinCard; title: string }[]
+  pinDetailsVisible: boolean
+  onSelectFacility: (assetId: number) => void
   focusedRack: RackData | null
   selectedServer: ServerData | null
   heatmapVisuals: Map<string, RackHeatmapVisual>
@@ -1409,8 +1516,20 @@ function DataCenterScene({
             key={object.id}
             object={object}
             tileSize={grid.tileSize}
-            status={facilityStatusFor(object)}
+            card={facilityCardFor(object)}
             selected={object.asset !== null && selectedFacilityAssetId === object.asset.assetId}
+            detailsVisible={pinDetailsVisible}
+            onSelect={onSelectFacility}
+          />
+        ))}
+        {grid && approximatePins.map(({ pin, card, title }) => (
+          <ApproximatePinMarker
+            key={pin.assetId}
+            pin={pin}
+            card={card}
+            title={title}
+            selected={selectedFacilityAssetId === pin.assetId}
+            detailsVisible={pinDetailsVisible}
             onSelect={onSelectFacility}
           />
         ))}
@@ -1700,16 +1819,24 @@ function formatFacilityMetric(metric: FacilityMetric): string {
   return metric.unit ? `${metric.value} ${metric.unit}` : String(metric.value)
 }
 
-/** 자산이 연결된 배치 오브젝트의 상세(E76). 값은 전부 FMS 원값이고 rack3d 가 판정하지 않는다. */
+type FacilityTarget = {
+  assetId: number
+  title: string
+  assetCode: string | null
+  category: string | null
+  monitoringType: string | null
+  /** 배경 핀에서 옮긴 자리면 `true`. 배치도 오브젝트 위면 `false`. */
+  approximate: boolean
+}
+
+/** 시설 핀의 상세(E76). 값은 전부 FMS 원값이고 rack3d 가 판정하지 않는다. */
 function FacilityDetailPanel({
-  object,
-  asset,
+  target,
   status,
   view,
   onOverview,
 }: {
-  object: SceneObject
-  asset: LayoutObjectAsset
+  target: FacilityTarget
   status: FacilityStatus | undefined
   view: FacilityStatusView
   onOverview: () => void
@@ -1726,8 +1853,8 @@ function FacilityDetailPanel({
       <p className="panel-title">FACILITY DETAIL</p>
       <div className="server-focus-heading">
         <div>
-          <strong>{asset.name ?? object.label}</strong>
-          <span>{orDash(asset.assetCode)}</span>
+          <strong>{target.title}</strong>
+          <span>{orDash(target.assetCode)}</span>
         </div>
         <span className={`server-state facility ${view.tone}`}><i />{view.label}</span>
       </div>
@@ -1737,8 +1864,15 @@ function FacilityDetailPanel({
         <dl>
           <div><dt>판정</dt><dd>{view.label}</dd></div>
           <div><dt>수신</dt><dd>{status?.collectedAt ? new Date(status.collectedAt).toLocaleString('ko-KR') : NO_VALUE}</dd></div>
-          <div><dt>CATEGORY</dt><dd>{orDash(asset.category)}</dd></div>
+          <div><dt>위치</dt><dd>{target.approximate ? '대략 위치' : '배치도 기준'}</dd></div>
+          <div><dt>CATEGORY</dt><dd>{orDash(target.category)}</dd></div>
         </dl>
+        {target.approximate && (
+          <p className="facility-empty">
+            시설종합현황 핀을 바닥에 옮긴 자리라 실제 위치와 다를 수 있습니다.{' '}
+            {productName} 레이아웃 설정에서 설비에 연결하면 정확한 자리에 표시됩니다.
+          </p>
+        )}
       </section>
 
       <section className="server-system-info">
@@ -1750,7 +1884,7 @@ function FacilityDetailPanel({
             ))}
           </dl>
         ) : (
-          <p className="facility-empty">{facilityMetricsNote(asset.monitoringType, status)}</p>
+          <p className="facility-empty">{facilityMetricsNote(target.monitoringType, status)}</p>
         )}
       </section>
     </>
@@ -2624,6 +2758,7 @@ function App() {
    */
   const [selectedFacilityAssetId, setSelectedFacilityAssetId] = useState<number | null>(null)
   const [facilityAlarmsExpanded, setFacilityAlarmsExpanded] = useState(false)
+  const [pinDetailsOn, setPinDetailsOn] = useState(true)
   const [dashboardOpen, setDashboardOpen] = useState(false)
   const [incidentMode, setIncidentMode] = useState(false)
   const [heatmapMode, setHeatmapMode] = useState<HeatmapMode>('normal')
@@ -2726,17 +2861,58 @@ function App() {
     return statuses
   }, [facilityStatuses])
   /** 첫 응답 전에도 "상태 없음"이다 — 받기 전이라고 정상으로 보이면 안 된다. */
-  const facilityStatusFor = useCallback((object: SceneObject): FacilityStatusView | null => (
-    object.asset ? facilityStatusView(facilityStatusById.get(object.asset.assetId), facilityFeedFailed) : null
-  ), [facilityStatusById, facilityFeedFailed])
-  const selectedFacility = useMemo(
-    () => (selectedFacilityAssetId !== null ? sceneObjects.find((object) => object.asset?.assetId === selectedFacilityAssetId) ?? null : null),
-    [sceneObjects, selectedFacilityAssetId],
-  )
+  const facilityCardFor = useCallback((object: SceneObject): FacilityPinCard | null => {
+    if (!object.asset) return null
+    const status = facilityStatusById.get(object.asset.assetId)
+    return facilityPinCard(object.asset, status, facilityStatusView(status, facilityFeedFailed))
+  }, [facilityStatusById, facilityFeedFailed])
+  const approximatePins = useMemo(() => (
+    collectApproximatePins(sceneObjects, facilityStatusById.values(), grid).flatMap((pin) => {
+      const status = facilityStatusById.get(pin.assetId)
+      if (!status) return []
+      return [{
+        pin,
+        card: facilityPinCard(status, status, facilityStatusView(status, facilityFeedFailed)),
+        title: facilityPinTitle(status.name, status.assetCode),
+      }]
+    })
+  ), [sceneObjects, facilityStatusById, grid, facilityFeedFailed])
+  const selectedFacility = useMemo((): FacilityTarget | null => {
+    if (selectedFacilityAssetId === null) return null
+    const asset = sceneObjects.find((object) => object.asset?.assetId === selectedFacilityAssetId)
+    if (asset?.asset) {
+      return {
+        assetId: asset.asset.assetId,
+        title: facilityPinTitle(asset.asset.name ?? asset.label, null),
+        assetCode: asset.asset.assetCode,
+        category: asset.asset.category,
+        monitoringType: asset.asset.monitoringType,
+        approximate: false,
+      }
+    }
+    const status = facilityStatusById.get(selectedFacilityAssetId)
+    if (!status?.pin || !approximatePins.some(({ pin }) => pin.assetId === selectedFacilityAssetId)) return null
+    return {
+      assetId: status.assetId,
+      title: facilityPinTitle(status.name, status.assetCode),
+      assetCode: status.assetCode,
+      category: status.category,
+      monitoringType: status.monitoringType,
+      approximate: true,
+    }
+  }, [sceneObjects, facilityStatusById, approximatePins, selectedFacilityAssetId])
+  // 선택한 핀이 사라지면(핀 삭제·자산 이동) 선택도 푼다. 남겨 두면 우클릭이 헛돌고 핀이 돌아올 때 패널이 다시 열린다.
+  if (selectedFacilityAssetId !== null && selectedFacility === null) setSelectedFacilityAssetId(null)
   /** 경보 중인 설비 — 시야 밖이거나 3D 에 없어도 알 수 있도록 상단에 띄운다. 심각한 것부터. */
   const facilityAlarms = useMemo(
-    () => collectFacilityAlarms(sceneObjects, unplacedFacilityAssets, facilityStatusById, facilityFeedFailed),
-    [sceneObjects, unplacedFacilityAssets, facilityStatusById, facilityFeedFailed],
+    () => collectFacilityAlarms(
+      sceneObjects,
+      unplacedFacilityAssets,
+      facilityStatusById,
+      new Set(approximatePins.map(({ pin }) => pin.assetId)),
+      facilityFeedFailed,
+    ),
+    [sceneObjects, unplacedFacilityAssets, facilityStatusById, approximatePins, facilityFeedFailed],
   )
   const facilityAlarmCount = facilityAlarms.reduce((sum, alarm) => sum + alarm.count, 0)
 
@@ -2901,10 +3077,10 @@ function App() {
     setSelectedFacilityAssetId(null)
     setIncidentMode(false)
   }
-  const handleSelectFacility = (object: SceneObject) => {
+  const handleSelectFacility = (assetId: number) => {
     setFocusedRackId(null)
     setSelectedServerId(null)
-    setSelectedFacilityAssetId(object.asset?.assetId ?? null)
+    setSelectedFacilityAssetId(assetId)
     setDashboardOpen(false)
     setIncidentMode(false)
   }
@@ -3059,7 +3235,9 @@ function App() {
               focusedRack={focusedRack}
               selectedServer={selectedServer}
               selectedFacilityAssetId={selectedFacilityAssetId}
-              facilityStatusFor={facilityStatusFor}
+              facilityCardFor={facilityCardFor}
+              approximatePins={approximatePins}
+              pinDetailsVisible={pinDetailsOn && !focusedRack}
               onSelectFacility={handleSelectFacility}
               heatmapVisuals={heatmapDataset.visuals}
               rackSeverities={rackSeverities}
@@ -3070,12 +3248,23 @@ function App() {
           </Canvas>
           <div className="crosshair" aria-hidden="true" />
 
+          {(approximatePins.length > 0 || sceneObjects.some((object) => object.asset)) && (
+            <button
+              type="button"
+              className="facility-pin-toggle"
+              aria-pressed={pinDetailsOn}
+              onClick={() => setPinDetailsOn((on) => !on)}
+            >
+              핀 상세 {pinDetailsOn ? '켜짐' : '꺼짐'}
+            </button>
+          )}
+
           {facilityAlarms.length > 0 && (
             <div className="facility-alarms" role="alert">
               <strong>설비 경보 {facilityAlarmCount}</strong>
-              {(facilityAlarmsExpanded ? facilityAlarms : facilityAlarms.slice(0, FACILITY_ALARMS_COLLAPSED)).map(({ key, label, view, object }) => (
-                object ? (
-                  <button key={key} type="button" className={view.tone} onClick={() => handleSelectFacility(object)}>
+              {(facilityAlarmsExpanded ? facilityAlarms : facilityAlarms.slice(0, FACILITY_ALARMS_COLLAPSED)).map(({ key, label, view, assetId }) => (
+                assetId !== null ? (
+                  <button key={key} type="button" className={view.tone} onClick={() => handleSelectFacility(assetId)}>
                     <i />{label} · {view.label}
                   </button>
                 ) : (
@@ -3174,15 +3363,14 @@ function App() {
         />
 
         <aside
-          key={selectedFacility?.asset ? `facility-${selectedFacility.asset.assetId}` : selectedServer?.id ?? focusedRack?.id ?? 'navigation'}
+          key={selectedFacility ? `facility-${selectedFacility.assetId}` : selectedServer?.id ?? focusedRack?.id ?? 'navigation'}
           className={selectedFacility ? 'controls-panel detail server-detail-panel' : focusedRack ? `controls-panel detail${selectedServer ? ' server-detail-panel' : ''}` : 'controls-panel'}
         >
-          {selectedFacility?.asset ? (
+          {selectedFacility ? (
             <FacilityDetailPanel
-              object={selectedFacility}
-              asset={selectedFacility.asset}
-              status={facilityStatusById.get(selectedFacility.asset.assetId)}
-              view={facilityStatusView(facilityStatusById.get(selectedFacility.asset.assetId), facilityFeedFailed)}
+              target={selectedFacility}
+              status={facilityStatusById.get(selectedFacility.assetId)}
+              view={facilityStatusView(facilityStatusById.get(selectedFacility.assetId), facilityFeedFailed)}
               onOverview={clearFocus}
             />
           ) : focusedRack && selectedServer ? (

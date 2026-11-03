@@ -218,17 +218,28 @@ const collectedAt = () => new Date().toISOString()
 const metric = (key, name, value, unit = null) => ({ key, name, value, unit })
 /**
  * E76 계약 예시 형태. 표시 분기마다 1건씩: 정상 / 주의+통신 이상 / 통신 이상 / 출입(측정값 없음) /
- * 심각 / 비수집 NORMAL(CCTV → 미수집) / 응답에 없음(화재) / 3D 에 없는 핀 자산(경보 1·정상 1).
+ * 심각 / 비수집 NORMAL(CCTV → 미수집) / 응답에 없음(화재) / 핀만 있는 자산(경보 1·정상 1, 대략 위치).
  */
-const facilityStatuses = () => [
+const facilityMeta = Object.fromEntries(Object.values(facilityAssetByObjectId).map((a) => [a.assetId, a]))
+/** 배경 핀(그림 비율). 연결된 자산의 핀은 무시돼야 하고(9015), 9100·9101 은 핀만 있어 대략 위치로 나온다. */
+const facilityPins = { 9015: { x: 0.1, y: 0.1 }, 9100: { x: 0.55, y: 0.5 }, 9101: { x: 0.2, y: 0.9 } }
+const pinOnlyMeta = {
+  9100: { assetCode: 'TH-07', name: '온습도 센서 #7', category: 'SENSOR', monitoringType: 'TH' },
+  9101: { assetCode: 'LEAK-03', name: '누수감지 #3', category: 'SENSOR', monitoringType: 'LEAK' },
+}
+const facilityStatuses = () => facilityStatusRows().map((row) => {
+  const { assetCode, name, category, monitoringType } = facilityMeta[row.assetId] ?? pinOnlyMeta[row.assetId]
+  return { assetCode, name, category, monitoringType, pin: facilityPins[row.assetId] ?? null, layoutLinked: row.assetId in facilityMeta, ...row }
+})
+const facilityStatusRows = () => [
   { assetId: 9006, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [metric('operating_state', '운전상태', '송풍, 냉방'), metric('run_state', '가동 상태', null), metric('temp', '실내온도', 22, '℃'), metric('humidity', '실내습도', 45, '%'), metric('alm_filter_clog', '필터막힘 경보', true), metric('alm_sensor', '센서 경보', false)] },
   { assetId: 9007, severity: 'CAUTION', stale: true, collectedAt: '2026-11-03T01:00:00Z', metrics: [metric('battery_soc', '배터리 잔량', 62, '%')] },
   { assetId: 9009, severity: 'NORMAL', stale: true, collectedAt: '2026-11-03T01:00:00Z', metrics: [metric('temp', '온도', null, '℃'), metric('humidity', '습도', 0, '%')] },
   { assetId: 9010, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [] },
   { assetId: 9015, severity: 'CRITICAL', stale: false, collectedAt: collectedAt(), metrics: [metric('leak_detected', '누수감지', true)] },
   { assetId: 9016, severity: 'NORMAL', stale: false, collectedAt: null, metrics: [] },
-  { assetId: 9100, severity: 'MAJOR', stale: false, collectedAt: collectedAt(), metrics: [] },
-  { assetId: 9101, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [] },
+  { assetId: 9100, severity: 'MAJOR', stale: false, collectedAt: collectedAt(), metrics: [metric('temp', '온도', 31.2, '℃'), metric('humidity', '습도', 44, '%')] },
+  { assetId: 9101, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [metric('leak_detected', '누수감지', false)] },
 ]
 const withFacilityAssets = (object) => {
   const asset = facilityAssetByObjectId[object.id]
