@@ -13,6 +13,7 @@ import {
   SERVER_MODEL_UNITS,
   buildZoneScene,
   collectApproximatePins,
+  layoutLinkMismatchKey,
   rackElementId,
   reuseUnchangedRacks,
 } from './rackLayouts'
@@ -101,6 +102,8 @@ const UMAP_RETRY_INTERVAL_MS = 30_000
  * 갱신 수단은 상단바 "지금 새로고침"이며 랙 목록·u맵과 **함께** 다시 받는다.
  */
 const LAYOUT_RETRY_INTERVAL_MS = 30_000
+/** 연결 변경으로 배치를 다시 받을 때의 2차 시도 간격. 폴링 훅의 수동 재시도 쿨다운보다 길어야 한다. */
+const LAYOUT_LINK_RETRY_MS = MANUAL_RETRY_COOLDOWN_MS + 1_000
 
 /**
  * 1U 높이·랙 바닥 오프셋(m)은 `rackLayouts`가 SSOT다 — 배치 오브젝트의 랙 박스 높이도
@@ -794,7 +797,7 @@ function FacilityPinCardView({
   onSelect: () => void
 }) {
   return (
-    <div className={`facility-pin ${card.tone}${selected ? ' selected' : ''}`}>
+    <div className={`facility-pin ${card.tone}${approximate ? ' approximate' : ''}${selected ? ' selected' : ''}`}>
       <button
         type="button"
         className="facility-pin-icon"
@@ -2901,6 +2904,24 @@ function App() {
       approximate: true,
     }
   }, [sceneObjects, facilityStatusById, approximatePins, selectedFacilityAssetId])
+  /**
+   * 편집기에서 연결이 바뀌면 상태 응답에 먼저 드러난다. 구조는 진입 시 1회가 원칙이지만, 이때는 오브젝트
+   * 자리를 알아야 그릴 수 있어 배치만 다시 받는다(E76 §3). 어긋난 자산 목록이 바뀔 때만 받아 반복하지 않는다.
+   */
+  const layoutLinkMismatch = useMemo(
+    () => (layout ? layoutLinkMismatchKey(sceneObjects, unplacedFacilityAssets, facilityStatusById.values()) : ''),
+    [layout, sceneObjects, unplacedFacilityAssets, facilityStatusById],
+  )
+  const retryLayout = layoutResource.retryNow
+  useEffect(() => {
+    if (!layoutLinkMismatch) return undefined
+    retryLayout()
+    // 직전 배치 요청이 수동 재시도 쿨다운 안이면 위 호출은 무시된다. 그 뒤로 한 번 더 시도한다.
+    // 받아서 해소되면 값이 바뀌어 이 예약은 취소되고, 해소되지 않아도 더 반복하지 않는다.
+    const retry = window.setTimeout(retryLayout, LAYOUT_LINK_RETRY_MS)
+    return () => window.clearTimeout(retry)
+  }, [layoutLinkMismatch, retryLayout])
+
   // 선택한 핀이 사라지면(핀 삭제·자산 이동) 선택도 푼다. 남겨 두면 우클릭이 헛돌고 핀이 돌아올 때 패널이 다시 열린다.
   if (selectedFacilityAssetId !== null && selectedFacility === null) setSelectedFacilityAssetId(null)
   /** 경보 중인 설비 — 시야 밖이거나 3D 에 없어도 알 수 있도록 상단에 띄운다. 심각한 것부터. */

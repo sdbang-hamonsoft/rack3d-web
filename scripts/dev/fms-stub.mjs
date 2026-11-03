@@ -222,14 +222,24 @@ const metric = (key, name, value, unit = null) => ({ key, name, value, unit })
  */
 const facilityMeta = Object.fromEntries(Object.values(facilityAssetByObjectId).map((a) => [a.assetId, a]))
 /** 배경 핀(그림 비율). 연결된 자산의 핀은 무시돼야 하고(9015), 9100·9101 은 핀만 있어 대략 위치로 나온다. */
-const facilityPins = { 9015: { x: 0.1, y: 0.1 }, 9100: { x: 0.55, y: 0.5 }, 9101: { x: 0.2, y: 0.9 } }
+const facilityPins = { 9015: { x: 0.1, y: 0.1 }, 9100: { x: 0.55, y: 0.5 }, 9101: { x: 0.2, y: 0.9 }, 9102: { x: 0.21, y: 0.91 } }
 const pinOnlyMeta = {
   9100: { assetCode: 'TH-07', name: '온습도 센서 #7', category: 'SENSOR', monitoringType: 'TH' },
   9101: { assetCode: 'LEAK-03', name: '누수감지 #3', category: 'SENSOR', monitoringType: 'LEAK' },
+  9102: { assetCode: 'TH-08', name: '온습도 센서 #8', category: 'SENSOR', monitoringType: 'TH' },
 }
+const facilityComm = { 9007: 'STALE', 9009: 'OFFLINE', 9016: 'UNKNOWN', 9101: 'UNKNOWN' }
+let facilityPolls = 0
 const facilityStatuses = () => facilityStatusRows().map((row) => {
   const { assetCode, name, category, monitoringType } = facilityMeta[row.assetId] ?? pinOnlyMeta[row.assetId]
-  return { assetCode, name, category, monitoringType, pin: facilityPins[row.assetId] ?? null, layoutLinked: row.assetId in facilityMeta, ...row }
+  return {
+    assetCode, name, category, monitoringType,
+    pin: facilityPins[row.assetId] ?? null,
+    // `facility-link-change`: 첫 응답 뒤 편집기에서 연결한 상태 — 배치를 다시 받되 반복하지 않아야 한다.
+    layoutLinked: row.assetId in facilityMeta || (SCENARIO === 'facility-link-change' && row.assetId === 9100 && facilityPolls > 1),
+    commStatus: facilityComm[row.assetId] ?? 'ONLINE',
+    ...row,
+  }
 })
 const facilityStatusRows = () => [
   { assetId: 9006, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [metric('operating_state', '운전상태', '송풍, 냉방'), metric('run_state', '가동 상태', null), metric('temp', '실내온도', 22, '℃'), metric('humidity', '실내습도', 45, '%'), metric('alm_filter_clog', '필터막힘 경보', true), metric('alm_sensor', '센서 경보', false)] },
@@ -240,6 +250,7 @@ const facilityStatusRows = () => [
   { assetId: 9016, severity: 'NORMAL', stale: false, collectedAt: null, metrics: [] },
   { assetId: 9100, severity: 'MAJOR', stale: false, collectedAt: collectedAt(), metrics: [metric('temp', '온도', 31.2, '℃'), metric('humidity', '습도', 44, '%')] },
   { assetId: 9101, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [metric('leak_detected', '누수감지', false)] },
+  { assetId: 9102, severity: 'NORMAL', stale: false, collectedAt: collectedAt(), metrics: [metric('temp', '온도', 23.5, '℃')] },
 ]
 const withFacilityAssets = (object) => {
   const asset = facilityAssetByObjectId[object.id]
@@ -378,6 +389,7 @@ createServer((req, res) => {
   }
   // ZONE 시설 상태(netis-fms E76). 없는 ZONE 은 404.
   if (req.url === '/api/zones/101/facility-status') {
+    facilityPolls += 1
     if (SCENARIO === 'facility-fail') return json(500, { code: 'INTERNAL_ERROR', message: '실패' })
     if (SCENARIO === 'facility-legacy') return json(404, { code: 'NOT_FOUND', message: '없음' })
     // DASHBOARD·PERFORMANCE 조회 권한 없는 계정 — 수집 유형이면 "권한 없음", 아니면 "제공하지 않음" 안내.

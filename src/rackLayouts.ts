@@ -433,7 +433,7 @@ export function parseFacilityStatuses(raw: unknown): FacilityStatus[] | null {
   if (!Array.isArray(raw)) return null
   return raw.flatMap((item: unknown): FacilityStatus[] => {
     if (typeof item !== 'object' || item === null) return []
-    const { assetId, severity, stale, collectedAt, metrics, name, assetCode, category, monitoringType, pin } = item as Record<string, unknown>
+    const { assetId, severity, stale, collectedAt, metrics, name, assetCode, category, monitoringType, pin, layoutLinked, commStatus } = item as Record<string, unknown>
     if (!Number.isInteger(assetId) || (assetId as number) <= 0) return []
     return [{
       assetId: assetId as number,
@@ -446,6 +446,8 @@ export function parseFacilityStatuses(raw: unknown): FacilityStatus[] | null {
       category: nullableText(category),
       monitoringType: nullableText(monitoringType),
       pin: toFacilityPin(pin),
+      layoutLinked: typeof layoutLinked === 'boolean' ? layoutLinked : null,
+      commStatus: commStatus === 'ONLINE' || commStatus === 'STALE' || commStatus === 'OFFLINE' || commStatus === 'UNKNOWN' ? commStatus : null,
     }]
   })
 }
@@ -453,20 +455,23 @@ export function parseFacilityStatuses(raw: unknown): FacilityStatus[] | null {
 /** 배경 핀 좌표를 옮겨 놓은 자리. 측정값이 아니라 **대략 위치**다. */
 export type ApproximatePin = {
   assetId: number
-  /** 씬 좌표(m). 칸 중심이 `index * tileSize` 이므로 바닥 범위는 −½칸에서 시작한다. */
+  /** 씬 좌표(m). 칸 중심이 `index * tileSize` 다. */
   worldX: number
   worldZ: number
 }
 
+/** 같은 칸에 대략 위치 핀이 여럿일 때 벌리는 반지름(칸 한 변 기준). */
+const SHARED_TILE_SPREAD = 0.3
+
 /**
  * 3D 오브젝트가 없는 핀 자산의 대략 자리.
+ *
+ * **칸은 FMS 편집기의 칸 제안(`suggestCell`)과 같은 식이다**(E76 §2-1) — 운영자가 제안 칸을 그대로
+ * 확정해도 3D 자리가 튀지 않는다. 같은 칸에 몰린 핀은 칸 안에서 벌린다.
  *
  * **판단 기준은 `layoutLinked` 가 아니라 지금 그려진 씬이다.** 배치는 진입 시 1회만 받고 상태는 30초마다
  * 받으므로 둘이 어긋날 수 있다. 플래그를 따르면 편집기에서 막 연결한 핀이 오브젝트 없이 사라지거나
  * 오브젝트와 핀에 두 번 그려진다. 씬 기준이면 한 자산은 항상 한 자리에만 나온다.
- *
- * 칸으로 내리지 않고 연속 좌표로 옮긴다 — 한 칸에 핀이 몰려도 포개지지 않고, 칸에 맞춰 놓으면
- * 대략 위치가 배치도처럼 정확해 보인다.
  */
 export function collectApproximatePins(
   objects: SceneObject[],
@@ -475,16 +480,50 @@ export function collectApproximatePins(
 ): ApproximatePin[] {
   if (!grid) return []
   const drawn = new Set(objects.flatMap((object) => (object.asset ? [object.asset.assetId] : [])))
-  const pins: ApproximatePin[] = []
+  const byTile = new Map<string, { assetId: number; col: number; row: number }[]>()
   for (const status of statuses) {
     if (!status.pin || drawn.has(status.assetId)) continue
-    pins.push({
-      assetId: status.assetId,
-      worldX: (status.pin.x * grid.cols - 0.5) * grid.tileSize,
-      worldZ: (status.pin.y * grid.rows - 0.5) * grid.tileSize,
-    })
+    const col = Math.min(grid.cols - 1, Math.floor(status.pin.x * grid.cols))
+    const row = Math.min(grid.rows - 1, Math.floor(status.pin.y * grid.rows))
+    const key = `${col},${row}`
+    byTile.set(key, [...(byTile.get(key) ?? []), { assetId: status.assetId, col, row }])
   }
-  return pins
+  return [...byTile.values()].flatMap((tile) => {
+    // 응답 순서가 바뀌어도 폴링마다 자리가 뒤섞이지 않게 자산 id 로 정렬한다.
+    const sorted = [...tile].sort((a, b) => a.assetId - b.assetId)
+    return sorted.map(({ assetId, col, row }, index) => {
+      const angle = (index / sorted.length) * Math.PI * 2
+      const spread = sorted.length > 1 ? SHARED_TILE_SPREAD * grid.tileSize : 0
+      return {
+        assetId,
+        worldX: col * grid.tileSize + Math.cos(angle) * spread,
+        worldZ: row * grid.tileSize + Math.sin(angle) * spread,
+      }
+    })
+  })
+}
+
+/**
+ * 배치가 낡았을 때 나타나는 자산. 상태 응답의 연결 여부와 지금 그린 씬이 다르면 편집기에서 연결이 바뀐 것이다.
+ *
+ * 값이 같은 동안 다시 묻지 않도록 호출부는 이 문자열이 **바뀔 때만** 배치를 다시 받는다. 다시 받아도 어긋나면
+ * (FMS 쪽 불일치) 문자열이 그대로라 반복하지 않는다. 다른 칸으로 옮긴 것은 이 값으로 알 수 없다(E76 §3).
+ */
+export function layoutLinkMismatchKey(
+  objects: SceneObject[],
+  unplacedAssets: LayoutObjectAsset[],
+  statuses: Iterable<FacilityStatus>,
+): string {
+  const inLayout = new Set([
+    ...objects.flatMap((object) => (object.asset ? [object.asset.assetId] : [])),
+    ...unplacedAssets.map((asset) => asset.assetId),
+  ])
+  const mismatched: number[] = []
+  for (const status of statuses) {
+    if (status.layoutLinked === null) continue
+    if (status.layoutLinked !== inLayout.has(status.assetId)) mismatched.push(status.assetId)
+  }
+  return mismatched.sort((a, b) => a - b).join(',')
 }
 
 /** 표시명 — `label` → 연결 자산 이름 → `type`. 전부 FMS 원값이다. */

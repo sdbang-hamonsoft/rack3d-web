@@ -261,6 +261,8 @@ export type FacilityMetric = {
   unit: string | null
 }
 
+export type FacilityCommStatus = 'ONLINE' | 'STALE' | 'OFFLINE' | 'UNKNOWN'
+
 /**
  * `GET /api/zones/{zoneId}/facility-status` 의 원소(ASSET READ, netis-fms E76).
  *
@@ -286,6 +288,10 @@ export type FacilityStatus = {
   monitoringType: string | null
   /** 시설종합현황 배경 그림 기준 0~1 비율. 평면도 좌표가 아니므로 3D 에는 "대략 위치"로만 쓴다. */
   pin: { x: number; y: number } | null
+  /** 그 ZONE 레이아웃 오브젝트에 연결됐는가. 그리는 자리는 씬이 정하고, 이 값은 배치가 낡았는지 볼 때만 쓴다. */
+  layoutLinked: boolean | null
+  /** 통신 상태 원값(E76b). 이전 FMS 는 주지 않아 `null` 이고, 그때는 `stale` 만으로 판단한다. */
+  commStatus: FacilityCommStatus | null
 }
 
 /**

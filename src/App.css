@@ -984,6 +984,8 @@ kbd { font-size: 13px; }
 .facility-pin.stale .facility-pin-details { color: #e3d6ff; }
 .facility-pin.danger .facility-pin-icon { animation: facility-pin-pulse-red 1.2s infinite ease-in-out; }
 .facility-pin.warning .facility-pin-icon { animation: facility-pin-pulse-yellow 1.5s infinite ease-in-out; }
+.facility-pin.approximate .facility-pin-details { border-style: dashed; opacity: .92; }
+.facility-pin.approximate .facility-pin-icon { border-style: dashed; }
 .facility-pin.selected .facility-pin-details { border-color: #62c9f2; box-shadow: 0 0 0 1px #62c9f2; }
 .facility-pin.selected .facility-pin-icon { outline: 2px solid #62c9f2; outline-offset: 2px; }
 @keyframes facility-pin-pulse-red { 0% { box-shadow: 0 0 0 0 #eb0058cc; } 70% { box-shadow: 0 0 0 14px #eb005800; } 100% { box-shadow: 0 0 0 0 #eb005800; } }

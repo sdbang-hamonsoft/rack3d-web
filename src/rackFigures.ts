@@ -12,7 +12,7 @@
 
 import * as THREE from 'three'
 import type { RackData, SceneObject, ServerData } from './rackLayouts'
-import type { FacilityMetric, FacilityStatus, LayoutObjectAsset, RackSeverity, RackSummary } from './api/types'
+import type { FacilityCommStatus, FacilityMetric, FacilityStatus, LayoutObjectAsset, RackSeverity, RackSummary } from './api/types'
 
 /** 값이 없을 때 화면에 쓰는 표기. **null을 0으로 바꾸지 않는다**(C6). */
 export const NO_VALUE = '—'
@@ -325,10 +325,22 @@ export function severityLabel(severity: RackSeverity): string {
 
 export type FacilityTone = SeverityTone | 'stale' | 'unknown'
 
+/** FMS `commLabel` 과 같다. ONLINE 은 적지 않는다. */
+const commLabels = { OFFLINE: '두절', STALE: '지연', UNKNOWN: '미상' } as const
+
+/**
+ * 통신 상태. `commStatus` 가 없는 이전 FMS 응답은 `stale` 로만 알 수 있어 지연·두절을 가르지 못한다
+ * — 그때는 색을 정하지 않고 `LEGACY_STALE`(문구 `통신 이상`)로 둔다.
+ */
+function commStatusOf(status: FacilityStatus | undefined): FacilityCommStatus | 'LEGACY_STALE' | null {
+  if (status?.commStatus) return status.commStatus
+  return status?.stale ? 'LEGACY_STALE' : null
+}
+
 export type FacilityStatusView = {
   tone: FacilityTone
   label: string
-  /** 경보(정상이 아닌 FMS 판정). 통신 이상·미수집·상태 없음은 경보가 아니다 — 판정이 없기 때문이다. */
+  /** 경보 = 정상이 아닌 FMS 판정 또는 통신 지연·두절(FMS 카드가 강조하는 범위). 미수집·상태 없음은 판정이 없어 경보가 아니다. */
   alarm: boolean
 }
 
@@ -344,18 +356,27 @@ export type FacilityStatusView = {
  */
 export function facilityStatusView(status: FacilityStatus | undefined, feedFailed: boolean): FacilityStatusView {
   const severity = status?.severity ?? null
-  const qualifier = feedFailed ? '미갱신' : status?.stale ? '통신 이상' : null
-  if (severity !== null && severity !== 'NORMAL') {
-    const label = severityLabel(severity)
-    // 모르는 등급(C5)을 정상처럼 보이게 두지 않는다.
-    return { tone: severityTones[severity] ?? 'warning', label: qualifier ? `${label} · ${qualifier}` : label, alarm: true }
+  const comm = commStatusOf(status)
+  const severityAlarm = severity !== null && severity !== 'NORMAL'
+  const commAlarm = comm === 'OFFLINE' || comm === 'STALE'
+  if (severityAlarm || commAlarm) {
+    // FMS 카드와 같다 — 심각·경고·두절 빨강, 주의·지연 노랑, 겹치면 더 나쁜 쪽. 랙 표시는 경고가 노랑이라
+    // `severityTones` 를 쓰지 않는다. 모르는 등급은 노랑으로 둔다(정상처럼 보이지 않게).
+    const tone = severity === 'CRITICAL' || severity === 'MAJOR' || comm === 'OFFLINE' ? 'critical' : 'warning'
+    const parts = [
+      severityAlarm ? severityLabel(severity) : null,
+      commAlarm ? `통신 ${commLabels[comm]}` : null,
+      feedFailed ? '미갱신' : comm === 'LEGACY_STALE' ? '통신 이상' : null,
+    ].filter((part) => part !== null)
+    return { tone, label: parts.join(' · '), alarm: true }
   }
   if (feedFailed) return { tone: 'unknown', label: '상태 미갱신', alarm: false }
-  if (status?.stale) return { tone: 'stale', label: '통신 이상', alarm: false }
+  if (comm === 'LEGACY_STALE') return { tone: 'stale', label: '통신 이상', alarm: false }
   if (severity === 'NORMAL') {
-    return status?.collectedAt
-      ? { tone: 'normal', label: severityLabel(severity), alarm: false }
-      : { tone: 'unknown', label: '미수집', alarm: false }
+    if (!status?.collectedAt) return { tone: 'unknown', label: '미수집', alarm: false }
+    return comm === 'UNKNOWN'
+      ? { tone: 'unknown', label: `통신 ${commLabels.UNKNOWN}`, alarm: false }
+      : { tone: 'normal', label: severityLabel(severity), alarm: false }
   }
   return { tone: 'unknown', label: '상태 없음', alarm: false }
 }
@@ -471,16 +492,21 @@ export function facilityPinTitle(name: string | null | undefined, assetCode: str
  * 상태 없음·미수집·미갱신을 흐리게 하고 글로 밝힌다 — {@link facilityStatusView} 의 규칙이다.
  */
 export function facilityPinCard(meta: FacilityMeta, status: FacilityStatus | undefined, view: FacilityStatusView): FacilityPinCard {
-  const severity = status?.severity
+  const comm = commStatusOf(status)
   let tone: FacilityPinTone = 'normal'
-  if (view.alarm) tone = severity === 'CRITICAL' || severity === 'MAJOR' ? 'danger' : 'warning'
+  if (view.alarm) tone = view.tone === 'critical' ? 'danger' : 'warning'
   else if (view.tone === 'stale') tone = 'stale'
   else if (view.tone === 'unknown') tone = 'muted'
 
   const lines = facilityMetricLines(meta.monitoringType, status?.metrics ?? [])
-  if (view.label.endsWith('미갱신')) lines.push('상태 미갱신')
-  else if (status?.stale) lines.push('통신: 이상')
-  else if (view.tone === 'unknown') lines.push(view.label)
+  if (view.label.endsWith('미갱신')) {
+    // 빨간 카드에 이유가 빠지지 않게 마지막으로 받은 통신 상태도 적는다.
+    if (comm === 'OFFLINE' || comm === 'STALE') lines.push(`통신: ${commLabels[comm]}`)
+    lines.push('상태 미갱신')
+  }
+  else if (view.label === '미수집' || view.label === '상태 없음') lines.push(view.label)
+  else if (comm === 'LEGACY_STALE') lines.push('통신: 이상')
+  else if (comm && comm !== 'ONLINE') lines.push(`통신: ${commLabels[comm]}`)
 
   const prefix = tone === 'danger' ? '⚠️ [경보] ' : tone === 'warning' ? '⚠️ [주의] ' : ''
   return { icon: facilityPinIcon(meta), tone, prefix, lines }
@@ -496,10 +522,15 @@ export type FacilityAlarm = {
   assetId: number | null
 }
 
-/** 등급 순서. 톤으로 정렬하면 MAJOR 와 CAUTION 이 같아 MAJOR 가 뒤로 밀린다. 모르는 등급은 MAJOR 와 같이 둔다. */
-const facilityAlarmRank = (severity: RackSeverity | null | undefined): number => {
+/**
+ * 경보 순서. 톤으로 정렬하면 MAJOR 와 CAUTION 이 같아 MAJOR 가 뒤로 밀린다. 모르는 등급은 MAJOR 와 같이 둔다.
+ * 두절은 FMS 카드가 빨강으로 그리는 만큼 경고와 같은 자리, 지연은 주의와 같은 자리다.
+ */
+const facilityAlarmRank = (status: FacilityStatus | undefined): number => {
+  const severity = status?.severity
   if (severity === 'CRITICAL') return 0
-  return severity === 'CAUTION' ? 2 : 1
+  if (status?.commStatus === 'OFFLINE') return 1
+  return severity === 'CAUTION' || severity === 'NORMAL' || severity === null || severity === undefined ? 2 : 1
 }
 
 /**
@@ -524,7 +555,7 @@ export function collectFacilityAlarms(
     shown.add(assetId)
     const status = statuses.get(assetId)
     const view = facilityStatusView(status, feedFailed)
-    if (view.alarm) alarms.push({ alarm: { key: object.id, label: facilityPinTitle(object.asset.name ?? object.label, null), count: 1, view, assetId }, rank: facilityAlarmRank(status?.severity) })
+    if (view.alarm) alarms.push({ alarm: { key: object.id, label: facilityPinTitle(object.asset.name ?? object.label, null), count: 1, view, assetId }, rank: facilityAlarmRank(status) })
   })
   const unplacedNames = new Map(unplacedAssets.map((asset) => [asset.assetId, asset.name]))
   const unnamed: { view: FacilityStatusView; rank: number }[] = []
@@ -532,7 +563,7 @@ export function collectFacilityAlarms(
     if (shown.has(assetId)) return
     const view = facilityStatusView(status, feedFailed)
     if (!view.alarm) return
-    const rank = facilityAlarmRank(status.severity)
+    const rank = facilityAlarmRank(status)
     const name = status.name ?? unplacedNames.get(assetId) ?? status.assetCode
     if (pinnedAssetIds.has(assetId)) {
       alarms.push({ alarm: { key: `asset-${assetId}`, label: facilityPinTitle(name, null), count: 1, view, assetId }, rank })
