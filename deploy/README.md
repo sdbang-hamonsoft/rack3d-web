@@ -120,7 +120,8 @@ git show HEAD:public/models/objects/precision-ac.glb | shasum -a 256   # 같아�
 ```bash
 curl -sS https://fms.burunet.co.kr/rack3d/ | grep -o 'assets/index-[^"]*\.js'
 ```
-옛 번들 경로가 여전히 200 이면 스테일 레이어가 남은 것이다(정상이면 404).
+옛 번들 경로가 200 이면 먼저 `cf-cache-status` 를 본다. `HIT` 이면 Cloudflare 캐시일 뿐이다 —
+쿼리를 붙여 캐시를 우회해 404 면 정상이다(2026-11-03 실측). 우회해도 200 이면 스테일 레이어가 남은 것이다.
 
 **4. 화면 육안 확인.** FMS 로그인 세션이 필요해 자동화 밖이다 — 사람이 본다.
 
@@ -128,6 +129,7 @@ curl -sS https://fms.burunet.co.kr/rack3d/ | grep -o 'assets/index-[^"]*\.js'
 
 ```bash
 ssh buru-ext '~/cicd/rack3d/deploy.sh main-<이전sha>'          # 권장 — 태그를 명시해 고정 배포
+# ⚠️ 태그 없는 deploy.sh 는 되돌리기가 아니다 — `.latest_build_tag` 가 방금 빌드한 태그다.
 ssh buru-ext 'kubectl -n rack3d rollout undo deployment/rack3d-web'   # 직전 리비전으로
 ```
 
