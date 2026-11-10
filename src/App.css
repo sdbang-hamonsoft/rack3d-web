@@ -499,7 +499,7 @@ kbd { font-size: 13px; }
 @keyframes splash-dot { 50% { opacity: .25; transform: scale(.7); } }
 @keyframes splash-progress { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 
-.lobby-shell { position: relative; min-height: 100%; overflow: auto; display: flex; flex-direction: column; background: #071019; color: #dce9f5; isolation: isolate; }
+.lobby-shell { position: relative; height: 100%; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; background: #071019; color: #dce9f5; isolation: isolate; }
 .lobby-shell::before { content: ''; position: fixed; inset: 0; z-index: -2; background-image: linear-gradient(#18293a55 1px, transparent 1px), linear-gradient(90deg, #18293a55 1px, transparent 1px); background-size: 48px 48px; mask-image: linear-gradient(to bottom, #000 0%, transparent 85%); }
 .lobby-shell::after { content: ''; position: fixed; inset: 0; z-index: -1; background: linear-gradient(135deg, #071019 0%, #08141fdd 52%, #06101aee 100%); }
 .lobby-glow { position: fixed; z-index: -1; border-radius: 50%; filter: blur(2px); pointer-events: none; }
@@ -529,25 +529,25 @@ kbd { font-size: 13px; }
 .fleet-summary div:last-child { border-right: 0; }
 .fleet-summary dt { color: #587189; font: 700 8px/1 ui-monospace, monospace; letter-spacing: .12em; }
 .fleet-summary dd { margin: 8px 0 0; color: #eaf5ff; font: 500 23px/1 ui-monospace, monospace; }
-.facility-list { display: grid; gap: 10px; }
-.facility-card { position: relative; width: 100%; min-height: 148px; display: grid; grid-template-columns: 58px minmax(260px, 1fr) auto 86px; align-items: center; gap: 26px; padding: 22px 24px; overflow: hidden; border: 1px solid #25394d; border-radius: 4px; background: linear-gradient(100deg, #0d1b28ef, #0a1722d9); color: inherit; text-align: left; cursor: pointer; transition: border-color .22s ease, background .22s ease, transform .22s ease, box-shadow .22s ease; }
+.facility-list { display: grid; gap: 6px; }
+.facility-card { position: relative; width: 100%; min-height: 64px; display: grid; grid-template-columns: 40px minmax(260px, 1fr) auto 70px; align-items: center; gap: 18px; padding: 10px 18px; overflow: hidden; border: 1px solid #25394d; border-radius: 4px; background: linear-gradient(100deg, #0d1b28ef, #0a1722d9); color: inherit; text-align: left; cursor: pointer; transition: border-color .22s ease, background .22s ease, transform .22s ease, box-shadow .22s ease; }
 .facility-card::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 3px; background: #2cbdf9; opacity: 0; box-shadow: 0 0 18px #2cbdf9; transition: opacity .22s ease; }
-.facility-card:hover, .facility-card:focus-visible { border-color: #3b7d9e; background: linear-gradient(100deg, #102434f5, #0b1b28ea); box-shadow: 0 16px 40px #0005, inset 0 0 40px #1cb9fa09; transform: translateX(4px); outline: none; }
+.facility-card:hover, .facility-card:focus-visible { border-color: #3b7d9e; background: linear-gradient(100deg, #102434f5, #0b1b28ea); box-shadow: 0 8px 22px #0004, inset 0 0 40px #1cb9fa09; transform: translateX(3px); outline: none; }
 .facility-card:hover::before, .facility-card:focus-visible::before { opacity: 1; }
-.facility-number { align-self: stretch; display: flex; align-items: flex-start; justify-content: center; padding-top: 4px; border-right: 1px solid #263a4e; color: #405b72; font: 500 12px/1 ui-monospace, monospace; }
+.facility-number { align-self: stretch; display: flex; align-items: center; justify-content: center; border-right: 1px solid #263a4e; color: #405b72; font: 500 12px/1 ui-monospace, monospace; }
 .facility-main { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; }
-.facility-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+.facility-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
 .facility-code { color: #45caff; font: 700 9px/1 ui-monospace, monospace; letter-spacing: .15em; }
 .facility-status { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 1px solid #225d43; border-radius: 2px; background: #0b2a1b; color: #36db7d; font: 700 7px/1 ui-monospace, monospace; letter-spacing: .08em; }
 .facility-status i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
 .facility-status.attention { border-color: #755625; background: #2b210d; color: #ffc247; }
-.facility-main > strong { color: #edf6ff; font-size: 19px; font-weight: 620; letter-spacing: -.02em; }
-.facility-main > small { margin-top: 5px; color: #688197; font-size: 10px; }
+.facility-main > strong { max-width: 100%; overflow: hidden; color: #edf6ff; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; font-weight: 620; letter-spacing: -.02em; }
+.facility-main > small { max-width: 100%; margin-top: 2px; overflow: hidden; color: #688197; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .facility-description { margin-top: 13px; overflow: hidden; color: #7f98ad; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .facility-metrics { display: grid; grid-template-columns: repeat(4, minmax(68px, 1fr)); gap: 10px; }
-.facility-metrics > span { min-width: 70px; display: flex; flex-direction: column; gap: 7px; padding-left: 14px; border-left: 1px solid #263a4e; }
+.facility-metrics > span { min-width: 70px; display: flex; flex-direction: column; gap: 5px; padding-left: 14px; border-left: 1px solid #263a4e; }
 .facility-metrics small { color: #526d84; font: 700 7px/1 ui-monospace, monospace; letter-spacing: .12em; }
-.facility-metrics strong { color: #dceaf6; font: 500 17px/1 ui-monospace, monospace; }
+.facility-metrics strong { color: #dceaf6; font: 500 14px/1 ui-monospace, monospace; }
 .facility-metrics em { margin-left: 2px; color: #657e94; font-size: 9px; font-style: normal; }
 .facility-metrics .has-alert strong { color: #ff5268; text-shadow: 0 0 10px #ff294555; }
 .facility-enter { align-self: stretch; display: flex; align-items: center; justify-content: flex-end; gap: 10px; border-left: 1px solid #263a4e; color: #526e85; font: 700 8px/1 ui-monospace, monospace; letter-spacing: .12em; transition: color .2s ease; }
@@ -601,8 +601,8 @@ kbd { font-size: 13px; }
   .lobby-intro br { display: none; }
   .fleet-summary { margin-top: 24px; }
   .fleet-summary div { min-width: 0; flex: 1; padding: 12px; }
-  .facility-card { grid-template-columns: 34px 1fr; gap: 14px; padding: 18px 15px; }
-  .facility-metrics { grid-column: 2; width: 100%; grid-template-columns: repeat(4, 1fr); margin-top: 4px; }
+  .facility-card { grid-template-columns: 28px 1fr; gap: 6px 12px; padding: 10px 12px; }
+  .facility-metrics { grid-column: 2; width: 100%; grid-template-columns: repeat(4, 1fr); margin-top: 2px; }
   .facility-metrics > span { min-width: 0; padding-left: 8px; }
   .facility-enter { display: none; }
   .facility-description { max-width: 100%; }

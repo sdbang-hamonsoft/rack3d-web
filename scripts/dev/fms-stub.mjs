@@ -308,6 +308,16 @@ const zone = {
   children: racks.map((r, i) => ({ id: r.locationId, layer: 'RACK', name: r.name, code: r.code, sortOrder: i, children: [] })),
 }
 
+/**
+ * `EXTRA_ZONES=<n>` — 랙 없는 합성 ZONE 을 덧붙인다. 로비 목록이 화면보다 길어질 때
+ * 스크롤되는지 확인하는 용도다(UAT 는 ZONE 이 몇 개뿐이라 이 경로가 안 보인다).
+ */
+const EXTRA_ZONES = Number(process.env.EXTRA_ZONES ?? 0)
+const extraZones = Array.from({ length: EXTRA_ZONES }, (_, i) => ({
+  id: 1000 + i, layer: 'ZONE', name: `합성 전산실 ${i + 1}`, code: `SYN-${String(i + 1).padStart(2, '0')}`,
+  sortOrder: 2 + i, totalAssetCount: 0, children: [],
+}))
+
 let blockedOnce = false
 const log = []
 createServer((req, res) => {
@@ -347,7 +357,7 @@ createServer((req, res) => {
     return json(200, {
       allLocations: true,
       roots: [{ id: 1, layer: 'BUILDING', name: '본사', code: 'HQ', sortOrder: 0, totalAssetCount: 15,
-        children: [{ id: 10, layer: 'FLOOR', name: '3층', code: null, sortOrder: 0, totalAssetCount: 15, children: [zone] }] }],
+        children: [{ id: 10, layer: 'FLOOR', name: '3층', code: null, sortOrder: 0, totalAssetCount: 15, children: [zone, ...extraZones] }] }],
     })
   }
   if (req.url === '/api/zones/101/racks') {
