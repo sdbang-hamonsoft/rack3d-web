@@ -7,7 +7,7 @@ const root = document.querySelector('main')
 const select = document.querySelector('#model')
 const status = document.querySelector('#status')
 const entries = [
-  ['objects/ups', 'UPS'], ['objects/temperature-humidity-sensor', '온습도센서'],
+  ['objects/aircon', '에어컨 · DC-AC-1200'], ['objects/ups', 'UPS'], ['objects/temperature-humidity-sensor', '온습도센서'],
   ['objects/battery-rack', '배터리랙'], ['objects/gas-suppression', '가스소화설비'],
   ['objects/distribution-board', '배전반 · SD-DB'], ['objects/seismic-sensor', '지진감지 · SD-DTS'],
   ['objects/fire-detector', '화재감지 · SD-FDS'], ['objects/access-tag-reader', '출입태깅기 · SD-ATR'],

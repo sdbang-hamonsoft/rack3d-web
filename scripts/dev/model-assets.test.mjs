@@ -33,6 +33,7 @@ test('facility dimensions use latest drawings and floor-centred geometry', async
     ['cctv', .04, .15, .18],
     ['battery-rack', .8, 2, 1], ['gas-suppression', .45, 2.4, .4],
     ['door', .9, 2.1, .096], ['temperature-humidity-sensor', .08, .12, .058],
+    ['aircon', 1.05, 1.88, .495],
   ]) {
     const { box } = await load(`objects/${name}`)
     near(box.min.y, 0)

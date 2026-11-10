@@ -287,6 +287,9 @@ export const LAYOUT_OBJECT_COLORS: Record<string, string> = {
   ACCESS: '#00695C',
   GAS: '#F57C00',
   SEISMIC: '#512DA8',
+  // 제안 타입 — FMS 팔레트 신설 대기. FMS 가 색을 배정하면 그 값으로 바꾼다.
+  // CRAC(#00796B)·WATER(#0288D1) 와 헷갈리지 않게 청록·파랑 계열을 피했다.
+  AIRCON: '#AFB42B',
 }
 
 /** 모르는 종류의 색. 팔레트 12종과 겹치지 않는 중립 회색이어야 한다. */
@@ -345,6 +348,8 @@ export const LAYOUT_OBJECT_MODELS: Record<string, string> = {
   FIRE: 'fire-detector',
   BATTERY: 'battery-rack',
   SUPPRESSION: 'gas-suppression',
+  // 제안 타입 — FMS 팔레트 신설 대기. 도면 DC-AC-1200 에어컨이고 CRAC(항온항습기)와 별개다.
+  AIRCON: 'aircon',
 }
 
 /**
@@ -370,6 +375,7 @@ export const LAYOUT_OBJECT_MODEL_HEIGHTS_M: Record<string, number> = {
   POWER: 2.20,
   SEISMIC: 0.08,
   FIRE: 0.07,
+  AIRCON: 1.88,
 }
 
 /** 모르는 종류의 박스 높이(m). */

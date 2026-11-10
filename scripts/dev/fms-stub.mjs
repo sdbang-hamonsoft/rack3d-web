@@ -284,6 +284,9 @@ const layoutObjects = [
   layoutObject({ id: 16, type: 'CCTV', x: 10, z: 7, dir: 'NORTH', label: 'CCTV SD-CCTV' }),
   layoutObject({ id: 15, type: 'WATER', x: 4, z: 7, dir: 'SOUTH', label: '누수감지' }),
   layoutObject({ id: 14, type: 'SUPPRESSION', x: 7, z: 7, dir: 'NORTH', label: '가스 소화 설비' }),
+  // `AIRCON`(에어컨, 도면 DC-AC-1200)도 **FMS 팔레트에 없는 제안 타입**이다. CRAC 와 별개 종류.
+  // 폭 1.05m(1.75칸)라 좌우 칸을 비워 둔 자리에 놓았고, 정면이 진입 카메라를 보게 SOUTH 다.
+  layoutObject({ id: 21, type: 'AIRCON', x: 6, z: 4, dir: 'SOUTH', label: '에어컨' }),
 ]
 
 /**

@@ -628,3 +628,56 @@ GATE와 별개인 장비로 연결한다. rack3d에 제안 타입 ACCESS→acces
 GATE를 변환하거나 모든 전산실에 임의 장비/좌표를 삽입하지 않는다.
 독립 장비는 전달된 좌표·방위대로 표시, 하단 1.2m는 FMS 높이 부재로 사용하는 표현용 가정.
 회귀 검사: GATE 유지, 독립 배치, 실제 배치 없는 장비 미생성. FMS 타입 확정 전 운영 미반영.
+
+## 16. 에어컨(AIRCON) 신규 — DC-AC-1200 (2026-11-10)
+
+사용자 첨부 도면 `artifacts/reference/precision-ac-dc-ac-1200-sheet.png`
+("FMS 3D DATA CENTER PRECISION AIR CONDITIONER UNIT", 모델 DC-AC-1200, 512×286 저해상도 — 형상 파악용).
+처음에는 항온항습기(CRAC) 재제작으로 받았으나 사용자 정정으로 **새 종류 추가**가 됐다.
+**CRAC(`precision_ac.py` → `precision-ac.glb`, STULZ 1200×890×1980, 높이 1.98)는 그대로다.**
+
+- 생성: `blender/objects/aircon.py` → `public/models/objects/aircon.glb`. 텍스처 0장, 바닥 y=0, 정면 +Z.
+- 채택 치수: 규격 표의 **W 1050 × D 495 × H 1880 mm**. 손잡이·그릴·팬 가드·배관 칼라 등
+  돌출부도 전부 이 외곽 안에 넣어 GLB 외곽이 곧 도면 치수다(본체 정면을 기둥보다 10mm 들이고 그 안에 붙였다).
+  도면의 전압·용량(50kW)·중량(650kg)은 자산 정보로 쓰지 않는다.
+- 모델링한 것: 네 모서리 기둥, 정면 상단 어두운 그릴 밴드, 전면 점검 도어(좌 손잡이·우 힌지),
+  도어 상단 가운데 CONTROL DISPLAY(꺼진 유리 + 버튼 5개), 도어 위쪽 밝은 루버, 하부 GRILLE
+  (어두운 홈 + 가로 루버 13장 + 틈으로 보이는 세로 리브 3줄), 상부 배기팬 3개(정사각 하우징·
+  원형 가드 링 3겹·스포크 4개·허브, 정지 상태), 우측 후방 CABLE & PIPE ENTRY(낮은 배관 칼라 3개),
+  측면 분할선과 하부 흡기/필터 그릴(세로 4칸), 후면 분할 패널·체결 나사.
+- 재질 5개(병합 후 프리미티브 5): 본체 `#D9DDE0` m0.7/r0.35 · 차콜 `#2A2E33` m0.8/r0.35 ·
+  홈 `#0E1114` m0.1/r0.6 · 표시창 유리 `#0E1114` m0.1/r0.1 · 금속 `#9AA2AA` m0.85/r0.3.
+  본체 metallic 을 §7 의 0.8 에서 0.7 로 낮췄다(§10-4 흰색 날림). 베벨은 병합 **전에** 적용(§12).
+- **빼기로 한 것**
+  1. 아이소메트릭의 내부(냉각 코일·블로어·컴프레서·필터·배관)와 평면도 아래 그림(블로어 2·컨트롤 모듈) —
+     구조 설명이다. 닫힌 외형만.
+  2. 디스플레이 값·LED 발광·팬 회전 — 상태 데이터가 없다(§7-2 와 같은 이유).
+  3. 정면 디스플레이 아래 로고 — 제조사 표기를 지어내지 않는다.
+  4. 노멀맵·여유공간 박스 — §7-2 와 같다.
+- **도면이 애매해 정한 것**
+  - CONTROL DISPLAY 는 라벨이 오른쪽에 붙어 있지만 정면도·아이소 모두 표시창 자체는 **가운데**라 가운데에 뒀다.
+  - 평면도의 아래쪽을 정면으로 보고 팬 열 중심을 앞에서 210mm, 케이블·배관 인입부를 **우측 후방**에 뒀다.
+  - 측면도는 한쪽만 있다. 흡기 그릴을 **양쪽 측면에 같게** 넣었다.
+  - 정면도 좌측 중간 높이의 짧은 표시를 도어 손잡이로, 하부 그릴의 점 3줄을 루버 받침 리브로 읽었다.
+  - 후면은 도면에 없다. 분할 패널과 나사만 두고 아무 장치도 지어내지 않았다.
+- 최종 GLB(`glb-stats.mjs`): **4,396 tris · 5 primitives · 264,192 bytes(258 KB) · 이미지 0장**,
+  외곽 1.050×1.880×0.495m(W/H/D), floorY=0. §2 예산(3k tris·150KB)은 넘고 UPS(6,412 tris·383KB)보다 작다.
+- ⚠️ **600mm 타일을 넘는다** — 폭 1.75칸, 깊이 0.83칸. §7-1 과 같은 판단으로 넘긴다
+  (`report(limit=1.06, limit_reason=...)`). 이웃 칸 오브젝트와 겹칠 수 있다.
+- 앱 연결: FMS 레이아웃 팔레트에 에어컨이 **없다**(RACK·CRAC·UPS·POWER·FIRE·WATER·SENSOR·CCTV·DOOR·GATE·GAS·SEISMIC).
+  `BATTERY`·`SUPPRESSION` 선례대로 **제안 타입 `AIRCON`** 으로 `LAYOUT_OBJECT_MODELS`(→`aircon`)·
+  `LAYOUT_OBJECT_MODEL_HEIGHTS_M`(1.88)·`LAYOUT_OBJECT_COLORS`(`#AFB42B`, 임시 — CRAC 청록·WATER 파랑과
+  구분, 기존 팔레트와 안 겹침)에 넣었다. **FMS 팔레트 신설·색 배정 전까지 운영 화면에는 나오지 않는다.**
+  이름표는 FMS `label` 을 그대로 쓴다(한글 라벨 표는 rack3d 에 없다). `MODEL_VERSION` 16 → 17.
+- 스텁 `fms-stub.mjs` 에 `AIRCON`(id 21, (6,4), SOUTH, '에어컨') 추가, 개발 카탈로그에 '에어컨 · DC-AC-1200' 추가.
+- 검증
+  - Node 테스트 24개 통과(`model-matching`·`model-assets`·`facility-status`·`branding`). `model-assets` 에
+    aircon 실제 외곽(1.05×1.88×0.495, 바닥 0) 기대값을, `model-matching` 에 "AIRCON 은 자기 모델·높이·고유색,
+    CRAC 는 `precision-ac`/1.98 그대로" 검사를 추가했다.
+  - `npm run lint` 통과, `npm run build` 통과(기존 JS 500kB 청크 경고 유지, arm64 node — §10-5).
+  - GLB 재수입 프리뷰: `artifacts/renders/aircon-dc-ac-1200-{front,rear,iso,top}.png`.
+  - 스텁 앱(Vite 5181 + 스텁 8777 + 헤드리스 크롬): `aircon.glb?v=17` 264,192 bytes 수신, 랙 A-03 앞에
+    '에어컨' 이름표(라임 칩)와 함께 표시. `artifacts/renders/aircon-dc-ac-1200-app{,-overview}.png`.
+    씬 노출에서 본체가 여전히 꽤 하얗게 보인다(§10-4 와 같은 경향) — 루버·팬 디테일은 읽힌다.
+  - 띄운 Vite·스텁·크롬은 종료, 크롬 임시 프로필 삭제 확인.
+- 남은 것: FMS 에 `AIRCON` 팔레트 신설·색 배정 요청, 운영 배포·실 FMS 육안 검수.

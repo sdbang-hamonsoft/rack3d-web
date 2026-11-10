@@ -87,3 +87,17 @@ test('standalone access reader preserves GATE and uses only supplied placement',
   assert.equal(JSON.stringify(layout), before)
   assert.equal(buildZoneScene([], { ...layout, objects: [gate] }, []).objects.length, 1)
 })
+
+test('proposed AIRCON type gets its own model and leaves CRAC untouched', async () => {
+  const { LAYOUT_OBJECT_MODELS, LAYOUT_OBJECT_COLORS } = await import('../../src/rackLayouts.ts')
+  const crac = { id: 1, type: 'CRAC', x: 1, z: 1, dir: 'NORTH', label: '항온항습기', rack: null }
+  const aircon = { id: 2, type: 'AIRCON', x: 4, z: 1, dir: 'NORTH', label: '에어컨', rack: null }
+  const scene = buildZoneScene([], { grid: { cols: 8, rows: 6, tileMm: 600 }, objects: [crac, aircon] }, [])
+  assert.equal(LAYOUT_OBJECT_MODELS.CRAC, 'precision-ac')
+  assert.equal(LAYOUT_OBJECT_MODELS.AIRCON, 'aircon')
+  assert.equal(scene.objects[0].heightM, 1.98)
+  assert.equal(scene.objects[1].heightM, 1.88)
+  assert.notEqual(scene.objects[1].color, scene.objects[0].color)
+  const others = Object.entries(LAYOUT_OBJECT_COLORS).filter(([type]) => type !== 'AIRCON').map(([, color]) => color)
+  assert.ok(!others.includes(LAYOUT_OBJECT_COLORS.AIRCON))
+})
