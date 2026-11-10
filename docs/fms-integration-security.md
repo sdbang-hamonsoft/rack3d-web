@@ -1651,3 +1651,26 @@ FMS `facility-status` API 는 그대로 남지만 rack3d 는 호출하지 않는
 - 라이브 CSS(`200`, 81,627 B, sha256 `863a8460…05ac34f`)에 `.lobby-shell{…height:100%;…overflow:hidden auto}`(= x hidden, y auto) 와 `.facility-card{…min-height:64px;…padding:10px 18px…}` 가 들어 있다.
 - 옛 번들 `index-DlP6n1ov.js` 는 공개 URL 200(`cf-cache-status: HIT`), 쿼리로 우회하면 404(`MISS`) — 원본에는 없다(퍼지 안 함).
 - **못 한 것**: 로그인 뒤 로비 화면 육안 확인(실제 스크롤·행 높이)은 사용자 몫이다. 모바일 폭도 안 봤다.
+
+
+## 11-51. 에어컨(AIRCON) 3D 모델 운영 배포 `main-b9d0ddc` (2026-11-10, 사용자 승인)
+
+새 GLB `public/models/objects/aircon.glb` 추가, `src/rackLayouts.ts` 에 제안 타입 `AIRCON` 매핑, `MODEL_VERSION` 16 → 17(§16). 항온항습기 `precision-ac.glb` 는 변경 없음.
+
+| 항목 | 값 |
+|---|---|
+| 이미지 | `10.1.20.21:5000/rack3d-web:main-b9d0ddc` |
+| 빌드된 커밋 | `b9d0ddcb693a637816ffb60a3f941bffd6917131` (buru-ext `build-cache/main` HEAD = origin/main) |
+| digest | `sha256:4435e20964c52fa27054806a8b038a72da919934eb0b450567bd99197451f530` (파드 imageID 와 같음) |
+| 직전 운영본 | `main-7899618` (`sha256:8677d650…f4eb494a`) |
+| generation / revision | 19 → 20, Ready 1/1, 재시작 0 |
+| 번들 | `assets/index-b3QEkFUy.js`, `assets/index-BDrqMZTp.css`(CSS 는 직전과 같음) — 공개 URL 로 받은 JS·CSS·`index.html` sha256 이 파드 안 파일과 일치 |
+| 되돌리기 | `ssh buru-ext '~/cicd/rack3d/deploy.sh main-7899618'` |
+
+- 빌드는 `build.sh` 대신 `deploy/README.md` 의 익명 우회(`ansible-playbook ... build.yml`)로 했다. 비대화형 세션이라 토큰 입력에서 멈추기 때문이다. 배포는 `deploy.sh main-b9d0ddc`(태그 명시). `.latest_build_tag` 와 `:latest` 는 `main-b9d0ddc` 이다.
+- 라이브 JS(`200`, 1,315,029 B, sha256 `a8a7a7a2…63809c4b`)에 `ST=\`17\``(MODEL_VERSION, `models/objects/${e}.glb?v=${ST}`) 와 `AIRCON:\`aircon\``(모델 매핑)·`AIRCON:1.88`(높이)·`AIRCON:\`#AFB42B\``(색) 이 들어 있다.
+- `/rack3d/models/objects/aircon.glb?v=17` → `200`, 264,192 B, sha256 `f1ce8579…b921b48e` = `git show HEAD:` 원본·파드 파일과 일치.
+- `/rack3d/models/objects/precision-ac.glb?v=17` → `200`, 114,432 B, sha256 `cc69cd5c…3ba6b4bb` = git 원본과 일치(변경 없음).
+- 두 GLB 모두 `cache-control: public, max-age=15552000`, `cf-cache-status: DYNAMIC`.
+- 옛 번들 `index-DOk4z-q6.js` 는 공개 URL 200(`cf-cache-status: HIT`), 쿼리로 우회하면 404(`MISS`) — 원본에는 없다(퍼지 안 함).
+- **못 한 것**: FMS 레이아웃 팔레트에 에어컨 종류가 아직 없어 `AIRCON` 오브젝트를 배치할 수 없다 — 실제 화면에 에어컨 모델이 나오는지는 확인하지 못했다(FMS 팔레트 신설 뒤 확인). 로그인 뒤 기존 화면(항온항습기 등) 육안 확인도 하지 않았다.
