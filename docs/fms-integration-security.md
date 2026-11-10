@@ -1632,3 +1632,22 @@ FMS `facility-status` API 는 그대로 남지만 rack3d 는 호출하지 않는
 옛 번들 `index-CiWSZAt-.js` 는 원본 404, 공개 URL 은 Cloudflare 캐시만 200 이다(퍼지 안 함).
 **못 한 것**: 로그인 화면·실응답 대조는 사용자 몫이다. 데모는 DOOR 1개만 연결돼 있고 지연·두절 자산이 없어 그 표시는 스텁 확인뿐이다.
 
+
+## 11-50. 로비 전산실 목록 스크롤·행 높이 축소 운영 배포 `main-7899618` (2026-11-10, 사용자 승인)
+
+변경은 `src/App.css` 뿐이다(나머지는 스텁·문서). GLB 변경 없음 → `MODEL_VERSION` 무관.
+
+| 항목 | 값 |
+|---|---|
+| 이미지 | `10.1.20.21:5000/rack3d-web:main-7899618` |
+| 빌드된 커밋 | `789961834505715b8f4a4944953fceab47e23b94` (buru-ext `build-cache/main` HEAD = origin/main) |
+| digest | `sha256:8677d6508ac1c397d208f44e525838e0f6c9d83f62ea6160cd2e2723f4eb494a` |
+| 직전 운영본 | `main-8b735c5` (`sha256:6a05cb2f…656725`) |
+| generation / revision | 18 → 19, Ready 1/1, 재시작 0 |
+| 번들 | `assets/index-DOk4z-q6.js`, `assets/index-BDrqMZTp.css` — 공개 URL 로 받은 JS·CSS·`index.html` sha256 이 파드 안 파일과 일치 |
+| 되돌리기 | `ssh buru-ext '~/cicd/rack3d/deploy.sh main-8b735c5'` |
+
+- 빌드는 `build.sh` 대신 `deploy/README.md` 의 익명 우회(`ansible-playbook ... build.yml`)로 했다. 비대화형 세션이라 토큰 입력에서 멈추기 때문이다. `.latest_build_tag` 와 `:latest` 는 `main-7899618` 이다.
+- 라이브 CSS(`200`, 81,627 B, sha256 `863a8460…05ac34f`)에 `.lobby-shell{…height:100%;…overflow:hidden auto}`(= x hidden, y auto) 와 `.facility-card{…min-height:64px;…padding:10px 18px…}` 가 들어 있다.
+- 옛 번들 `index-DlP6n1ov.js` 는 공개 URL 200(`cf-cache-status: HIT`), 쿼리로 우회하면 404(`MISS`) — 원본에는 없다(퍼지 안 함).
+- **못 한 것**: 로그인 뒤 로비 화면 육안 확인(실제 스크롤·행 높이)은 사용자 몫이다. 모바일 폭도 안 봤다.
